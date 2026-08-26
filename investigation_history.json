@@ -1,0 +1,489 @@
+[
+  {
+    "investigation_id": "INV-258DBD79",
+    "created_at": "2026-08-26T17:48:30.049780+00:00",
+    "question": "Why are payment transactions failing?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "scenario_id": "mixed_ambiguous",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  },
+  {
+    "investigation_id": "INV-1DF1726C",
+    "created_at": "2026-08-26T17:47:42.906633+00:00",
+    "question": "Why are these payment transactions failing?",
+    "status": "AI_ASSISTED_DIAGNOSIS",
+    "scenario_id": "explicit_transaction_input",
+    "predicted_cause": "issuer_issue",
+    "assessment": "clear",
+    "selected_paths": [
+      "issuer_issue"
+    ],
+    "top_probability": 0.755,
+    "probability_gap": 0.63,
+    "validation_passed": true,
+    "human_escalation_required": false,
+    "failure_count": 6
+  },
+  {
+    "investigation_id": "INV-94E9E19F",
+    "created_at": "2026-08-26T17:47:29.284155+00:00",
+    "question": "Why are these payment transactions failing?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "scenario_id": "explicit_transaction_input",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  },
+  {
+    "investigation_id": "INV-6217F727",
+    "created_at": "2026-08-26T17:47:12.047115+00:00",
+    "question": "Why are these payment transactions failing?",
+    "status": "AI_ASSISTED_DIAGNOSIS",
+    "scenario_id": "explicit_transaction_input",
+    "predicted_cause": "issuer_issue",
+    "assessment": "clear",
+    "selected_paths": [
+      "issuer_issue"
+    ],
+    "top_probability": 0.755,
+    "probability_gap": 0.63,
+    "validation_passed": true,
+    "human_escalation_required": false,
+    "failure_count": 6
+  },
+  {
+    "investigation_id": "INV-6E23C68E",
+    "created_at": "2026-08-26T17:46:57.547361+00:00",
+    "question": "Why are these payment transactions failing?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "scenario_id": "explicit_transaction_input",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  },
+  {
+    "investigation_id": "INV-CB68AEFC",
+    "created_at": "2026-08-26T16:12:17.014160+00:00",
+    "question": "Is the payment gateway causing payment-service failures?",
+    "status": "AI_ASSISTED_DIAGNOSIS",
+    "scenario_id": "payment_service_issue",
+    "predicted_cause": "payment_service_issue",
+    "assessment": "clear",
+    "selected_paths": [
+      "payment_service_issue"
+    ],
+    "top_probability": 0.72,
+    "probability_gap": 0.6,
+    "validation_passed": true,
+    "human_escalation_required": false,
+    "failure_count": 4
+  },
+  {
+    "investigation_id": "INV-26E4D497",
+    "created_at": "2026-08-26T16:11:47.712726+00:00",
+    "question": "Why are code 91 network or switch failures increasing?",
+    "status": "AI_ASSISTED_DIAGNOSIS",
+    "scenario_id": "network_switch_issue",
+    "predicted_cause": "network_switch_issue",
+    "assessment": "clear",
+    "selected_paths": [
+      "network_switch_issue"
+    ],
+    "top_probability": 0.71,
+    "probability_gap": 0.56,
+    "validation_passed": true,
+    "human_escalation_required": false,
+    "failure_count": 4
+  },
+  {
+    "investigation_id": "INV-76462564",
+    "created_at": "2026-08-26T16:10:39.729789+00:00",
+    "question": "Are failures caused by invalid merchant configuration?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "scenario_id": "merchant_issue",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.655,
+    "probability_gap": 0.485,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 4
+  },
+  {
+    "investigation_id": "INV-5ACBA29B",
+    "created_at": "2026-08-26T16:06:31.698104+00:00",
+    "question": "Investigate payment incident INC-4821. Incident: Elevated Visa authorization failures (code 91). Affected service: auth-gateway. Severity: SEV1. Status: Investigating. Observed incident description: Visa authorization decline rate rose from 3% to 27% after a routing change on the EU acquirer link. Response code 91 dominates the failure mix. What is the most likely cause of the payment failures?",
+    "status": "AI_ASSISTED_DIAGNOSIS",
+    "scenario_id": "network_switch_issue",
+    "predicted_cause": "network_switch_issue",
+    "assessment": "clear",
+    "selected_paths": [
+      "network_switch_issue"
+    ],
+    "top_probability": 0.71,
+    "probability_gap": 0.56,
+    "validation_passed": true,
+    "human_escalation_required": false,
+    "failure_count": 4
+  },
+  {
+    "investigation_id": "INV-DBE3250A",
+    "created_at": "2026-08-26T15:58:27.336205+00:00",
+    "question": "What response codes are causing the failures?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "scenario_id": "mixed_ambiguous",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  },
+  {
+    "investigation_id": "INV-C2AA4A0C",
+    "created_at": "2026-08-26T15:57:30.086399+00:00",
+    "question": "Are failures caused by invalid merchant configuration?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "scenario_id": "merchant_issue",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.655,
+    "probability_gap": 0.485,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 4
+  },
+  {
+    "investigation_id": "INV-B62A1E4E",
+    "created_at": "2026-08-26T15:56:32.025776+00:00",
+    "question": "Why are payment transactions failing?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "scenario_id": "mixed_ambiguous",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  },
+  {
+    "investigation_id": "INV-740F6B90",
+    "created_at": "2026-08-26T15:56:08.087960+00:00",
+    "question": "Why are payment transactions failing?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "scenario_id": "mixed_ambiguous",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  },
+  {
+    "investigation_id": "INV-0ADC0BF6",
+    "created_at": "2026-08-26T15:55:19.626290+00:00",
+    "question": "Why are issuer or switch unavailable failures increasing?",
+    "status": "AI_ASSISTED_DIAGNOSIS",
+    "scenario_id": "network_switch_issue",
+    "predicted_cause": "network_switch_issue",
+    "assessment": "clear",
+    "selected_paths": [
+      "network_switch_issue"
+    ],
+    "top_probability": 0.71,
+    "probability_gap": 0.56,
+    "validation_passed": true,
+    "human_escalation_required": false,
+    "failure_count": 4
+  },
+  {
+    "investigation_id": "INV-24E85EAE",
+    "created_at": "2026-08-26T15:54:47.575042+00:00",
+    "question": "Why are issuer or switch unavailable failures increasing?",
+    "status": "AI_ASSISTED_DIAGNOSIS",
+    "scenario_id": "network_switch_issue",
+    "predicted_cause": "network_switch_issue",
+    "assessment": "clear",
+    "selected_paths": [
+      "network_switch_issue"
+    ],
+    "top_probability": 0.71,
+    "probability_gap": 0.56,
+    "validation_passed": true,
+    "human_escalation_required": false,
+    "failure_count": 4
+  },
+  {
+    "investigation_id": "INV-FBBD9A32",
+    "created_at": "2026-08-26T15:54:31.063899+00:00",
+    "question": "What response codes are causing the failures?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "scenario_id": "mixed_ambiguous",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  },
+  {
+    "investigation_id": "INV-67F48C46",
+    "created_at": "2026-08-26T15:51:24.719553+00:00",
+    "question": "Why are payment transactions failing?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "scenario_id": "mixed_ambiguous",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  },
+  {
+    "investigation_id": "INV-E97E3D1F",
+    "created_at": "2026-08-26T15:50:39.355005+00:00",
+    "question": "What response codes are causing the failures?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "scenario_id": "mixed_ambiguous",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  },
+  {
+    "investigation_id": "INV-30CB58AA",
+    "created_at": "2026-08-26T15:50:18.771764+00:00",
+    "question": "Investigate payment incident INC-4821. Incident: Elevated Visa authorization failures (code 91). Affected service: auth-gateway. Severity: SEV1. Status: Investigating. Observed incident description: Visa authorization decline rate rose from 3% to 27% after a routing change on the EU acquirer link. Response code 91 dominates the failure mix. What is the most likely cause of the payment failures?",
+    "status": "AI_ASSISTED_DIAGNOSIS",
+    "scenario_id": "network_switch_issue",
+    "predicted_cause": "network_switch_issue",
+    "assessment": "clear",
+    "selected_paths": [
+      "network_switch_issue"
+    ],
+    "top_probability": 0.71,
+    "probability_gap": 0.56,
+    "validation_passed": true,
+    "human_escalation_required": false,
+    "failure_count": 4
+  },
+  {
+    "investigation_id": "INV-D1240873",
+    "created_at": "2026-08-26T15:44:18.903439+00:00",
+    "question": "Investigate payment incident INC-4821. Incident: Elevated Visa authorization failures (code 91). Affected service: auth-gateway. Severity: SEV1. Status: Investigating. Observed incident description: Visa authorization decline rate rose from 3% to 27% after a routing change on the EU acquirer link. Response code 91 dominates the failure mix. What is the most likely cause of the payment failures?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  },
+  {
+    "investigation_id": "INV-2CE97666",
+    "created_at": "2026-08-26T15:43:19.116284+00:00",
+    "question": "Are these failures caused by an invalid merchant configuration?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  },
+  {
+    "investigation_id": "INV-FF20B4F0",
+    "created_at": "2026-08-26T15:42:04.022529+00:00",
+    "question": "Why are issuer or switch unavailable failures increasing?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  },
+  {
+    "investigation_id": "INV-BE678E95",
+    "created_at": "2026-08-26T15:39:41.634192+00:00",
+    "question": "What response codes are causing the failures?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  },
+  {
+    "investigation_id": "INV-B34831C4",
+    "created_at": "2026-08-26T15:30:20.659616+00:00",
+    "question": "Why are payment transactions failing?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  },
+  {
+    "investigation_id": "INV-52D96F0E",
+    "created_at": "2026-08-25T16:26:10.778903+00:00",
+    "question": "Why did this new test incident fail?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  },
+  {
+    "investigation_id": "INV-C81B95A5",
+    "created_at": "2026-08-25T16:24:02.054230+00:00",
+    "question": "Why are payment transactions failing? how many failed",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  },
+  {
+    "investigation_id": "INV-650D5F74",
+    "created_at": "2026-08-25T16:22:25.692283+00:00",
+    "question": "Why are payment transactions failing?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  },
+  {
+    "investigation_id": "INV-4B09584B",
+    "created_at": "2026-08-25T16:16:12.642920+00:00",
+    "question": "Why are payment transactions failing?",
+    "status": "HUMAN_REVIEW_REQUIRED",
+    "predicted_cause": "merchant_issue",
+    "assessment": "ambiguous",
+    "selected_paths": [
+      "merchant_issue",
+      "issuer_issue"
+    ],
+    "top_probability": 0.455,
+    "probability_gap": 0.03,
+    "validation_passed": true,
+    "human_escalation_required": true,
+    "failure_count": 5
+  }
+]

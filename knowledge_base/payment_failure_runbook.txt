@@ -1,0 +1,69 @@
+Payment Failure Investigation Runbook
+
+
+Response Code 05
+Meaning: Do not honor.
+Category: Issuer decline.
+
+Typical interpretation:
+The issuer declined the authorization request.
+
+Investigation guidance:
+- Review associated authorization reason information when available.
+- Check whether failures are concentrated around particular merchants.
+- Compare the failure pattern with other authorization transactions.
+- Check whether the issuer-decline rate has increased unexpectedly.
+
+
+Response Code 91
+Meaning: Issuer or switch unavailable.
+Category: Network or issuer unavailable.
+
+Typical interpretation:
+The downstream issuer, switch, or network path may be unavailable.
+
+Investigation guidance:
+- Check payment network connectivity.
+- Check downstream issuer or switch availability.
+- Review gateway or network incident alerts.
+- Compare failure rates across merchants and services.
+
+
+Reason Code 001
+Meaning: Invalid Account.
+Category: Account issue.
+
+Investigation guidance:
+- Check whether failures are concentrated around account-related authorization attempts.
+- Compare similar transactions with successful authorizations.
+- Review relevant account information available to the authorized investigation process.
+
+
+Reason Code 002
+Meaning: Account Status.
+Category: Account issue.
+
+Investigation guidance:
+- Check whether failed authorizations share the same account-status pattern.
+- Compare failures with other account-related authorization results.
+- Review available account-status information according to approved procedures.
+
+
+Reason Code 004
+Meaning: Invalid Merchant.
+Category: Merchant issue.
+
+Investigation guidance:
+- Check whether failures are isolated to a particular merchant.
+- Compare transactions from the affected merchant with other merchants.
+- Review the merchant configuration or reference information available to the investigation team.
+
+
+Reason Code 005
+Meaning: Merchant Blocked for Auth.
+Category: Merchant issue.
+
+Investigation guidance:
+- Check whether failures are concentrated on the affected merchant.
+- Compare authorization behavior across other merchants.
+- Review available merchant authorization configuration and operational information.
