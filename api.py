@@ -9,6 +9,7 @@ from investigation_service import (
     get_investigation_history,
     run_investigation,
 )
+from supabase_store import list_transactions
 
 
 # =========================================================
@@ -160,6 +161,21 @@ def investigation_history(
         ),
         "investigations":
             investigations,
+    }
+
+
+@app.get("/api/transactions")
+def transaction_history(
+    limit: int = 100,
+) -> Dict[str, Any]:
+    """Return persisted synthetic authorization records from Supabase."""
+
+    safe_limit = max(1, min(limit, 500))
+    transactions = list_transactions(safe_limit)
+
+    return {
+        "count": len(transactions),
+        "transactions": transactions,
     }
 
 

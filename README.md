@@ -31,11 +31,29 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 .venv/bin/uvicorn api:app --host 127.0.0
 
 The offline flags avoid optional Hugging Face metadata requests when the sentence-transformer model is already cached.
 
+## Supabase database
+
+Run `supabase/migrations/20260826_initial_schema.sql` in the Supabase SQL Editor, then add these server-only values to `.env`:
+
+```env
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+```
+
+Investigation history is stored in Supabase, and saved synthetic authorization records are available through the transactions endpoint. Never expose the service-role key to the frontend or store real cardholder data.
+
+Seed the existing synthetic fixtures once after applying the schema:
+
+```sh
+.venv/bin/python seed_demo_transactions.py
+```
+
 ## API
 
 - `GET /health`
 - `POST /api/investigate`
 - `GET /api/investigations?limit=20`
+- `GET /api/transactions?limit=100`
 - `GET /api/knowledge-base`
 
 ## Evaluation and regression checks

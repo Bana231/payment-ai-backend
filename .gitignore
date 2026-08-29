@@ -1,4 +1,6 @@
 .env
+.env.supabase
 .venv/
 __pycache__/
 *.pyc
+investigation_history.json

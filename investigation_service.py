@@ -1,19 +1,9 @@
-import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from agent_graph import investigation_graph
-
-
-# =========================================================
-# Investigation History Storage
-# =========================================================
-
-HISTORY_FILE = Path(
-    "investigation_history.json"
-)
+from supabase_store import list_investigations, save_investigation
 
 
 # =========================================================
@@ -820,53 +810,6 @@ def select_synthetic_scenario(
 # History Helpers
 # =========================================================
 
-def load_investigation_history() -> List[Dict[str, Any]]:
-
-    if not HISTORY_FILE.exists():
-        return []
-
-    try:
-        with open(
-            HISTORY_FILE,
-            "r",
-            encoding="utf-8",
-        ) as file:
-            history = json.load(
-                file
-            )
-
-        if isinstance(
-            history,
-            list,
-        ):
-            return history
-
-    except (
-        json.JSONDecodeError,
-        OSError,
-    ):
-        pass
-
-    return []
-
-
-def save_investigation_history(
-    history: List[Dict[str, Any]],
-) -> None:
-
-    with open(
-        HISTORY_FILE,
-        "w",
-        encoding="utf-8",
-    ) as file:
-        json.dump(
-            history,
-            file,
-            indent=2,
-            ensure_ascii=False,
-        )
-
-
 def add_history_record(
     result: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -958,31 +901,12 @@ def add_history_record(
             ),
     }
 
-    history = (
-        load_investigation_history()
-    )
-
-    history.insert(
-        0,
-        record,
-    )
-
-    history = history[:100]
-
-    save_investigation_history(
-        history
-    )
-
-    return record
+    return save_investigation(record)
 
 
 def get_investigation_history(
     limit: int = 20,
 ) -> List[Dict[str, Any]]:
-
-    history = (
-        load_investigation_history()
-    )
 
     safe_limit = max(
         1,
@@ -992,9 +916,7 @@ def get_investigation_history(
         ),
     )
 
-    return history[
-        :safe_limit
-    ]
+    return list_investigations(safe_limit)
 
 
 # =========================================================
