@@ -9,7 +9,7 @@ from investigation_service import (
     get_investigation_history,
     run_investigation,
 )
-from supabase_store import list_transactions
+from supabase_store import list_knowledge_documents, list_transactions
 
 
 # =========================================================
@@ -443,9 +443,7 @@ def load_knowledge_documents() -> List[
 @app.get("/api/knowledge-base")
 def knowledge_base() -> Dict[str, Any]:
 
-    documents = (
-        load_knowledge_documents()
-    )
+    documents = list_knowledge_documents()
 
     return {
         "count":

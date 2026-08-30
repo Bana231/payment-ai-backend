@@ -2,12 +2,11 @@ from typing import TypedDict, List, Dict, Any
 
 from langgraph.graph import StateGraph, START, END
 
-from data import transactions as default_transactions
-from data import response_codes
 from diagnosis_map import get_diagnosis_map
 from feature_extractor import extract_diagnostic_features
 from ml_diagnosis import diagnose
 from rag.retriever import retrieve_relevant_chunks
+from supabase_store import list_transactions
 
 from llm_service import (
     generate_investigation_summary,
@@ -57,6 +56,12 @@ class InvestigationState(TypedDict, total=False):
 
 MINIMUM_CLEAR_PROBABILITY = 0.70
 MINIMUM_CLEAR_GAP = 0.30
+
+RESPONSE_CODES = {
+    "00": {"meaning": "Approved", "category": "success"},
+    "05": {"meaning": "Do not honor", "category": "issuer_decline"},
+    "91": {"meaning": "Issuer or switch unavailable", "category": "network_or_issuer_unavailable"},
+}
 
 
 # =========================================================
@@ -121,7 +126,7 @@ def analyze_transactions(
 ):
     input_transactions = state.get(
         "transactions",
-        default_transactions,
+        list_transactions(500),
     )
 
     failed_transactions = [
@@ -429,7 +434,7 @@ def analyze_response_codes(
         response_code_counts.items()
     ):
 
-        code_info = response_codes.get(
+        code_info = RESPONSE_CODES.get(
             code,
             {
                 "meaning":
@@ -472,7 +477,7 @@ def analyze_response_codes(
 
     for code in dominant_failure_codes:
 
-        code_info = response_codes.get(
+        code_info = RESPONSE_CODES.get(
             code
         )
 

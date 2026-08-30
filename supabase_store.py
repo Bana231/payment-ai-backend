@@ -57,3 +57,11 @@ def list_transactions(limit: int) -> List[Dict[str, Any]]:
         .execute()
     )
     return response.data
+
+
+def list_knowledge_documents() -> List[Dict[str, Any]]:
+    return get_supabase().table("knowledge_documents").select("*").order("slug").execute().data
+
+
+def list_training_examples() -> List[Dict[str, Any]]:
+    return get_supabase().table("ml_training_examples").select("label, features").execute().data

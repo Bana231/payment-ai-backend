@@ -42,11 +42,7 @@ SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 
 Investigation history is stored in Supabase, and saved synthetic authorization records are available through the transactions endpoint. Never expose the service-role key to the frontend or store real cardholder data.
 
-Seed the existing synthetic fixtures once after applying the schema:
-
-```sh
-.venv/bin/python seed_demo_transactions.py
-```
+Synthetic transactions, runbook documents, and ML training examples are stored in Supabase. Do not commit local copies of those datasets.
 
 ## API
 

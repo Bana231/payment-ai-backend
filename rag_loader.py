@@ -1,11 +1,11 @@
-from pathlib import Path
-
-
-RUNBOOK_PATH = Path("knowledge_base/payment_failure_runbook.txt")
+from supabase_store import list_knowledge_documents
 
 
 def load_runbook():
-    return RUNBOOK_PATH.read_text()
+    documents = list_knowledge_documents()
+    if not documents:
+        raise RuntimeError("Supabase knowledge_documents is empty.")
+    return "\n\n".join(document["content"] for document in documents)
 
 
 def split_into_chunks(text: str):

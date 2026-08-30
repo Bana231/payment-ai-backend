@@ -1,6 +1,6 @@
-import json
-
 from sklearn.ensemble import RandomForestClassifier
+
+from supabase_store import list_training_examples
 
 
 FEATURE_NAMES = [
@@ -22,12 +22,9 @@ FEATURE_NAMES = [
 
 
 def load_training_data():
-    with open(
-        "synthetic_ml_dataset.json",
-        "r",
-        encoding="utf-8",
-    ) as file:
-        dataset = json.load(file)
+    dataset = list_training_examples()
+    if not dataset:
+        raise RuntimeError("Supabase ml_training_examples is empty.")
 
     x_train = []
     y_train = []
