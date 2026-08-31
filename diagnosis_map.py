@@ -5,7 +5,7 @@ DIAGNOSIS_MAP = {
             "Transaction failures associated with issuer declines "
             "or issuer-side processing."
         ),
-        "response_codes": ["05"],
+        "failure_domains": ["F01"],
         "services": ["authorization-service"],
     },
 
@@ -15,7 +15,7 @@ DIAGNOSIS_MAP = {
             "Transaction failures associated with payment-network, "
             "switch, or downstream connectivity."
         ),
-        "response_codes": ["91"],
+        "failure_domains": ["F02", "F03", "F05", "F06"],
         "services": ["payment-gateway"],
     },
 
@@ -25,7 +25,7 @@ DIAGNOSIS_MAP = {
             "Failures concentrated around a specific merchant "
             "or merchant integration."
         ),
-        "response_codes": [],
+        "failure_domains": ["F04", "F05", "F06"],
         "services": [],
     },
 
@@ -35,7 +35,7 @@ DIAGNOSIS_MAP = {
             "Failures associated with an internal payment service "
             "or processing component."
         ),
-        "response_codes": [],
+        "failure_domains": ["F07", "F08", "F09"],
         "services": [],
     },
 
@@ -45,7 +45,7 @@ DIAGNOSIS_MAP = {
             "The available diagnostic features do not clearly "
             "support one of the known failure categories."
         ),
-        "response_codes": [],
+        "failure_domains": [],
         "services": [],
     },
 }

@@ -86,6 +86,16 @@ class InvestigationRequest(BaseModel):
         List[TransactionInput]
     ] = None
 
+    timezone_offset_minutes: int = Field(
+        default=0,
+        description=(
+            "The caller's UTC offset in minutes, JS Date.getTimezoneOffset() "
+            "convention. Lets date language like 'this month' or '4th "
+            "September' resolve against the caller's calendar day rather "
+            "than the UTC calendar day the data happens to be stored in."
+        ),
+    )
+
 
 # =========================================================
 # Health
@@ -121,6 +131,7 @@ def investigate(
         return run_investigation(
             question=request.question,
             transactions=transactions,
+            timezone_offset_minutes=request.timezone_offset_minutes,
         )
 
     except ValueError as error:
@@ -170,7 +181,7 @@ def transaction_history(
 ) -> Dict[str, Any]:
     """Return persisted synthetic authorization records from Supabase."""
 
-    safe_limit = max(1, min(limit, 500))
+    safe_limit = max(1, min(limit, 5000))
     transactions = list_transactions(safe_limit)
 
     return {

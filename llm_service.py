@@ -47,7 +47,7 @@ Original question:
 OBSERVED TRANSACTION EVIDENCE:
 {observed_transaction_evidence}
 
-RESPONSE-CODE ANALYSIS:
+FAILURE-REASON ANALYSIS:
 {response_code_analysis}
 
 ML DIAGNOSTIC SIGNAL:
@@ -73,8 +73,8 @@ SOURCE BOUNDARIES
 Observed transaction evidence:
 - Directly calculated facts from current transactions.
 
-Response-code analysis:
-- Observed response-code counts and approved meanings.
+Failure-reason analysis:
+- Observed taxonomy reason counts and approved meanings.
 
 ML diagnostic signal:
 - Model estimates only.
@@ -115,6 +115,14 @@ STRICT RULES
 - A "clear" ML assessment means the leading diagnostic class
   passed the prototype routing thresholds.
   It does NOT mean certainty.
+
+- The investigation plan's evidence_map grades every candidate cause's
+  evidence as "strong", "moderate", "weak" or "negligible" (a formal
+  probability-based grading against the uninformative baseline, not a
+  judgment call). Use these exact grades when characterizing how much
+  support a cause has. Do not invent your own qualitative language
+  ("some evidence", "fairly likely") for this — use the grade that is
+  actually present in evidence_map for that cause.
 
 - Use wording such as:
   "leading hypothesis"
@@ -163,6 +171,12 @@ If assessment == "ambiguous":
 - Preserve uncertainty.
 
 - Do not combine the competing hypotheses into one cause.
+
+- State each competing hypothesis's evidence_map grade explicitly (e.g.
+  "moderate evidence" vs "weak evidence") rather than presenting them as
+  equally uncertain — "ambiguous" describes the accept/reject decision, not
+  the relative strength of the alternatives, and those are not the same
+  thing.
 
 
 =========================================================
@@ -229,7 +243,7 @@ REPORT TO VALIDATE:
 OBSERVED TRANSACTION EVIDENCE:
 {observed_transaction_evidence}
 
-RESPONSE-CODE ANALYSIS:
+FAILURE-REASON ANALYSIS:
 {response_code_analysis}
 
 ML DIAGNOSTIC SIGNAL:
@@ -291,6 +305,14 @@ MARK VALIDATION FAIL IF THE REPORT
 - Creates unnecessary competing hypotheses in a clear case.
 
 - Uses causal certainty stronger than the evidence allows.
+
+- Describes a cause's evidence using a qualitative word ("some evidence",
+  "fairly likely", "strongly suggests", etc.) that does not match that
+  cause's actual grade in the investigation plan's evidence_map ("strong",
+  "moderate", "weak" or "negligible").
+
+- In an ambiguous case, presents the competing hypotheses as equally
+  uncertain when their evidence_map grades actually differ.
 
 
 =========================================================
@@ -369,7 +391,7 @@ SELECTED DIAGNOSIS PATHS:
 ASSESSMENT:
 {assessment}
 
-RESPONSE-CODE ANALYSIS:
+FAILURE-REASON ANALYSIS:
 {response_code_analysis}
 
 RETRIEVED APPROVED RUNBOOK EVIDENCE:
@@ -479,7 +501,7 @@ OBSERVED TRANSACTION EVIDENCE:
 ML DIAGNOSTIC OUTPUT:
 {ml_diagnosis}
 
-RESPONSE-CODE ANALYSIS:
+FAILURE-REASON ANALYSIS:
 {response_code_analysis}
 
 AVAILABLE DIAGNOSIS MAP:
@@ -523,7 +545,7 @@ RULES
 - Do not declare final root cause.
 
 - Explain the investigation rationale using actual observed
-  transaction facts, response-code evidence, and ML signals.
+  transaction facts, failure-reason evidence, and ML signals.
 
 
 Return ONLY valid JSON:

@@ -5,6 +5,7 @@ expose this key through the browser or commit it to source control.
 """
 
 import os
+from datetime import datetime
 from functools import lru_cache
 from typing import Any, Dict, List
 
@@ -54,6 +55,22 @@ def list_transactions(limit: int) -> List[Dict[str, Any]]:
         .select("*")
         .order("created_at", desc=True)
         .limit(limit)
+        .execute()
+    )
+    return response.data
+
+
+def list_transactions_in_window(
+    start: datetime,
+    end: datetime,
+) -> List[Dict[str, Any]]:
+    response = (
+        get_supabase()
+        .table("transactions")
+        .select("*")
+        .gte("created_at", start.isoformat())
+        .lt("created_at", end.isoformat())
+        .order("created_at", desc=True)
         .execute()
     )
     return response.data

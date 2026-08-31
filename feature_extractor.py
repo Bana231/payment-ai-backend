@@ -1,5 +1,7 @@
 from typing import List, Dict, Any
 
+from failure_taxonomy import failure_domain_code
+
 
 def extract_diagnostic_features(
     transactions: List[Dict[str, Any]],
@@ -12,42 +14,44 @@ def extract_diagnostic_features(
 
     failure_count = len(failed_transactions)
 
-    # Response-code features
+    # Legacy feature names remain stable for the existing trained model, but
+    # their values are derived from the approved F01–F09 taxonomy—not ISO
+    # response codes such as 91 or 68.
     code_05_count = sum(
         1
         for txn in failed_transactions
-        if txn["response_code"] == "05"
+        if failure_domain_code(txn) == "F01"
     )
 
     code_91_count = sum(
         1
         for txn in failed_transactions
-        if txn["response_code"] == "91"
+        if failure_domain_code(txn) in {"F02", "F03", "F05", "F06"}
     )
 
     # Reason-code features
     reason_001_count = sum(
         1
         for txn in failed_transactions
-        if txn.get("reason_code") == "001"
+        if failure_domain_code(txn) == "F01"
     )
 
     reason_002_count = sum(
         1
         for txn in failed_transactions
-        if txn.get("reason_code") == "002"
+        if failure_domain_code(txn) == "F08"
     )
 
     reason_004_count = sum(
         1
         for txn in failed_transactions
-        if txn.get("reason_code") == "004"
+        if failure_domain_code(txn) == "F04"
     )
 
     reason_005_count = sum(
         1
         for txn in failed_transactions
-        if txn.get("reason_code") == "005"
+        if failure_domain_code(txn) in {"F05", "F06"}
     )
 
     # Service-level features
@@ -91,7 +95,10 @@ def extract_diagnostic_features(
     )
 
     merchant_issue_ratio = (
-        (reason_004_count + reason_005_count) / failure_count
+        (
+            reason_004_count
+            + reason_005_count
+        ) / failure_count
         if failure_count
         else 0
     )

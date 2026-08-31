@@ -3,6 +3,7 @@ from typing import TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, START, END
 
 from diagnosis_map import get_diagnosis_map
+from failure_taxonomy import failure_reason_code, failure_reason_details
 from feature_extractor import extract_diagnostic_features
 from ml_diagnosis import diagnose
 from rag.retriever import retrieve_relevant_chunks
@@ -51,18 +52,77 @@ class InvestigationState(TypedDict, total=False):
 
 
 # =========================================================
-# Prototype ML Policy
+# Coverage-vs-Confidence Policy
+#
+# This system is a selective classifier with a reject option, not a system
+# tuned for speed: rather than always emitting a single root-cause verdict,
+# it only commits to one when the ML evidence clears an explicit confidence
+# bar (MINIMUM_CLEAR_PROBABILITY, MINIMUM_CLEAR_GAP below), and defers every
+# other case to human review. Moving that bar trades coverage (the share of
+# investigations the system resolves on its own) against confidence (the
+# accuracy of the ones it does resolve) — see evaluate_confidence_coverage.py
+# for the empirical coverage/accuracy this specific bar yields on held-out
+# data (92.5% coverage, 94.59% accuracy on accepted cases at time of writing).
+#
+# Why this use case sits on the confidence side of that trade-off: an
+# incorrect payment root-cause handed to an on-call engineer as settled fact
+# can send remediation in the wrong direction and prolong the real incident —
+# a cost that compounds. A short human-review delay on an ambiguous case does
+# not. Payment-ops investigation is therefore treated as tolerating delay
+# over error: MINIMUM_CLEAR_PROBABILITY/MINIMUM_CLEAR_GAP are set high enough
+# that a "clear" verdict should be safe to act on without a human in the
+# loop, at the cost of routing more borderline cases to human review than a
+# looser bar would.
+#
+# "Good vs weak evidence" is not itself binary, even though the accept/
+# reject decision above is: grade_evidence_strength() below formally grades
+# every candidate cause's evidence (not just the top one) against the
+# uninformative baseline (1 / number of causes), so an "ambiguous" verdict
+# still reports which alternatives are genuinely competitive versus which are
+# noise, rather than collapsing all non-accepted causes into one flat label.
 # =========================================================
 
 MINIMUM_CLEAR_PROBABILITY = 0.70
 MINIMUM_CLEAR_GAP = 0.30
 
-RESPONSE_CODES = {
-    "00": {"meaning": "Approved", "category": "success"},
-    "05": {"meaning": "Do not honor", "category": "issuer_decline"},
-    "91": {"meaning": "Issuer or switch unavailable", "category": "network_or_issuer_unavailable"},
-}
+# Evidence-strength bands, expressed as "lift" over the uninformative
+# baseline (1 / number of candidate causes) rather than a fixed number, so
+# the grading stays meaningful if the number of diagnosis classes changes.
+WEAK_EVIDENCE_LIFT = 1.0
+MODERATE_EVIDENCE_LIFT = 2.0
 
+
+def grade_evidence_strength(
+    probability: float,
+    is_top_cause: bool,
+    probability_gap: float,
+    num_causes: int,
+) -> str:
+    """Grade one cause's evidence on a coverage-vs-confidence scale.
+
+    "strong" is exactly the accept region of the coverage/confidence policy
+    above (this cause is what a "clear" verdict would select). Everything
+    else is graded by how far its probability sits above the uninformative
+    baseline, so a rejected case still distinguishes a genuinely competing
+    alternative from noise instead of reporting both as equally "ambiguous".
+    """
+
+    if (
+        is_top_cause
+        and probability >= MINIMUM_CLEAR_PROBABILITY
+        and probability_gap >= MINIMUM_CLEAR_GAP
+    ):
+        return "strong"
+
+    baseline = 1 / num_causes if num_causes else 0
+
+    if not baseline or probability <= baseline * WEAK_EVIDENCE_LIFT:
+        return "negligible"
+
+    if probability <= baseline * MODERATE_EVIDENCE_LIFT:
+        return "weak"
+
+    return "moderate"
 
 # =========================================================
 # RAG Path Relevance
@@ -74,6 +134,11 @@ PATH_RELEVANCE_TERMS = {
         "merchant authorization": 3,
         "invalid merchant": 3,
         "merchant blocked": 3,
+        "merchant unavailable": 3,
+        "merchant offline": 3,
+        "merchant network down": 3,
+        "merchant category": 3,
+        "mcc blocked": 3,
         "specific merchant": 2,
         "particular merchant": 2,
         "affected merchant": 2,
@@ -84,7 +149,6 @@ PATH_RELEVANCE_TERMS = {
     "issuer_issue": {
         "issuer decline": 3,
         "issuer-decline": 3,
-        "do not honor": 3,
         "response code 05": 3,
         "authorization reason": 3,
         "invalid account": 3,
@@ -97,7 +161,8 @@ PATH_RELEVANCE_TERMS = {
         "network connectivity": 3,
         "switch unavailable": 3,
         "issuer or switch unavailable": 3,
-        "response code 91": 3,
+        "issuer unavailable": 3,
+        "issuer availability": 3,
         "payment network": 2,
         "network incident": 2,
         "gateway incident": 2,
@@ -340,6 +405,27 @@ def assess_ml_diagnosis(
         in ranked_probabilities[:2]
     ]
 
+    top_cause = (
+        ranked_probabilities[0][0]
+        if ranked_probabilities
+        else None
+    )
+
+    num_causes = len(probabilities) or 1
+
+    evidence_map = {
+        label: {
+            "probability": probability,
+            "evidence_strength": grade_evidence_strength(
+                probability,
+                is_top_cause=(label == top_cause),
+                probability_gap=probability_gap,
+                num_causes=num_causes,
+            ),
+        }
+        for label, probability in probabilities.items()
+    }
+
     if (
         top_probability
         >= MINIMUM_CLEAR_PROBABILITY
@@ -392,6 +478,9 @@ def assess_ml_diagnosis(
 
             "minimum_clear_gap":
                 MINIMUM_CLEAR_GAP,
+
+            "evidence_map":
+                evidence_map,
         }
     }
 
@@ -413,9 +502,7 @@ def analyze_response_codes(
 
     for txn in failed_transactions:
 
-        code = txn.get(
-            "response_code"
-        )
+        code = failure_reason_code(txn)
 
         if not code:
             continue
@@ -434,26 +521,17 @@ def analyze_response_codes(
         response_code_counts.items()
     ):
 
-        code_info = RESPONSE_CODES.get(
-            code,
-            {
-                "meaning":
-                    "Unknown response code",
-
-                "category":
-                    "unknown",
-            },
-        )
+        code_info = failure_reason_details(code)
 
         response_code_analysis[code] = {
             "count":
                 count,
 
             "meaning":
-                code_info["meaning"],
+                code_info["display_name"],
 
             "category":
-                code_info["category"],
+                code_info["domain_name"],
         }
 
     if response_code_counts:
@@ -477,17 +555,11 @@ def analyze_response_codes(
 
     for code in dominant_failure_codes:
 
-        code_info = RESPONSE_CODES.get(
-            code
+        code_info = failure_reason_details(code)
+        root_cause_hypothesis.append(
+            f"Observed failures are associated with failure reason "
+            f"{code}: {code_info['display_name']}."
         )
-
-        if code_info:
-
-            root_cause_hypothesis.append(
-                f"Observed failures are associated "
-                f"with response code {code}: "
-                f"{code_info['meaning']}."
-            )
 
     return {
         "response_code_counts":
@@ -578,6 +650,16 @@ def investigation_intelligence_agent(
             agent_plan.get(
                 "reason",
                 "",
+            ),
+
+        # Formal per-cause evidence grading (coverage-vs-confidence policy),
+        # not just the accepted/selected paths, so downstream reporting can
+        # describe why a rejected alternative is "moderate" evidence versus
+        # "negligible" rather than lumping every non-selected cause together.
+        "evidence_map":
+            assessment.get(
+                "evidence_map",
+                {},
             ),
     }
 
@@ -766,8 +848,8 @@ def retrieve_rag_evidence(
                 f"Description: "
                 f"{path_info.get('description', '')}\n"
 
-                f"Relevant response codes: "
-                f"{path_info.get('response_codes', [])}\n"
+                f"Relevant failure domains: "
+                f"{path_info.get('failure_domains', [])}\n"
 
                 f"Relevant services: "
                 f"{path_info.get('services', [])}"
