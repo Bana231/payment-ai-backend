@@ -23,10 +23,14 @@ def extract_diagnostic_features(
         if failure_domain_code(txn) == "F01"
     )
 
+    # F05/F06 (merchant/acquirer connectivity, POS/terminal) are deliberately
+    # excluded here and counted only in reason_005_count below. Counting them
+    # in both this network-side feature and the merchant-side one diluted
+    # evidence for both hypotheses whenever F05/F06 dominated a batch.
     code_91_count = sum(
         1
         for txn in failed_transactions
-        if failure_domain_code(txn) in {"F02", "F03", "F05", "F06"}
+        if failure_domain_code(txn) in {"F02", "F03"}
     )
 
     # Reason-code features

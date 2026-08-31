@@ -13,9 +13,12 @@ DIAGNOSIS_MAP = {
         "name": "Network / switch issue",
         "description": (
             "Transaction failures associated with payment-network, "
-            "switch, or downstream connectivity."
+            "switch, or issuer/scheme availability."
         ),
-        "failure_domains": ["F02", "F03", "F05", "F06"],
+        # F05/F06 (merchant/acquirer connectivity, POS/terminal) belong to
+        # merchant_issue only — see feature_extractor.py's code_91_count.
+        # Listing them here too diluted evidence for both hypotheses.
+        "failure_domains": ["F02", "F03"],
         "services": ["payment-gateway"],
     },
 

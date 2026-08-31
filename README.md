@@ -54,7 +54,7 @@ Run `supabase/migrations/20260831_payment_failure_catalog.sql` to add the shared
 
 For a fresh, destructive rebuild of only the PayOps tables, use `supabase/migrations/20260831_reset_and_rebuild.sql`. It includes the ordered failure taxonomy and the minimum synthetic RAG/ML seed data required for the current backend to start.
 
-Synthetic transactions, runbook documents, and ML training examples are stored in Supabase. Do not commit local copies of those datasets.
+Synthetic transactions, runbook documents, and ML training examples are stored in Supabase. Do not commit local copies of those datasets. `ml_training_examples` is seeded from `synthetic_ml_dataset.json` (see "Evaluation and regression checks" below) rather than the minimal placeholder rows in the reset script — reseed it after a fresh rebuild if you want the model to train on the full 400-example set instead of the reset script's bootstrap examples.
 
 ## API
 
@@ -67,15 +67,22 @@ Synthetic transactions, runbook documents, and ML training examples are stored i
 ## Evaluation and regression checks
 
 ```sh
-.venv/bin/python test_ml_diagnosis.py
-.venv/bin/python test_ml_class_coverage.py
-.venv/bin/python test_clear_case.py
 .venv/bin/python evaluate_ml_model.py
 .venv/bin/python evaluate_confidence_coverage.py
 ```
 
+Both scripts are self-contained: they load `synthetic_ml_dataset.json` (400 labelled synthetic incidents, roughly balanced across the 4 classes) directly, split it 80/20 train/test (stratified, `random_state=42`), and report held-out metrics independently of whatever is currently seeded in Supabase. `evaluate_ml_model.py` reports overall accuracy, a per-class classification report, and a confusion matrix. `evaluate_confidence_coverage.py` reports the coverage/accuracy trade-off (see "Decision policy" above) across several candidate thresholds, not just the one currently configured — this is the direct empirical evidence behind that section's claims.
+
 Current held-out evaluation: 93.75% overall accuracy on 80 test incidents. With the configured 0.70 minimum top probability and 0.30 minimum probability gap, coverage is 92.5% and accepted-case accuracy is 94.59%.
+
+`synthetic_ml_dataset.json` is also the source for the live model: it replaces an earlier 8-example placeholder set that only existed to keep the Random Forest bootable, seeded into Supabase's `ml_training_examples` table so the deployed model actually trains on the same 400 examples these scripts evaluate against, not a token bootstrap set.
 
 ## Data boundary and limitations
 
 The prototype uses synthetic transactions, generated labelled incidents and a local runbook. It is not validated on production payment data. Model outputs are hypotheses, not confirmed causes; ambiguous or validation-failed cases require human review.
+
+**Known ML limitations:**
+
+- `synthetic_ml_dataset.json`'s incidents are deliberately noisy and realistic — even a `merchant_issue`-labelled incident typically carries some background issuer/network signal (`merchant_issue_ratio` tops out at 0.75 across the whole dataset; median 0.46). A perfectly pure, single-domain batch (`merchant_issue_ratio = 1.0`) is a valid transaction pattern, but it falls outside anything the model was trained on — Random Forests do not extrapolate reliably past the range of their training data, so a "clean" synthetic test batch can get a less confident verdict than a messier, more realistic one would. That is expected behavior on an out-of-distribution input, not a bug, and worth keeping in mind when hand-crafting test batches via the simulator.
+- F07 (gateway/processor) and F09 (invalid request) have no dedicated feature in `feature_extractor.py`; only F08 is partially represented, folded into `account_issue_ratio` alongside F01 — a combination that does not correspond to any single diagnosis class's domain list. The model is effectively blind to F07/F09-dominated evidence. Not yet fixed.
+- Two related issues were found and fixed during this evaluation pass, both now resolved: `feature_extractor.py`/`diagnosis_map.py` previously double-counted F05/F06 (merchant/acquirer connectivity, POS/terminal) into both `network_switch_issue`'s and `merchant_issue`'s evidence at once, diluting both — confirmed on a real network-only batch: probability gap went from 9.5% (ambiguous) to 65% (clear, correct). Separately, the simulator (`payment-simulator/app.py`) used to write the same `service` value for every transaction, which the model's `authorization_service_failures`/`payment_gateway_failures` features never saw vary across any of the 400 training examples — a genuine train/serve skew, not just a labelling inconsistency. The simulator now assigns a domain-weighted `service` value matching the class-level distribution measured in the training set.
