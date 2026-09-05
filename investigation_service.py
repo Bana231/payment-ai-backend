@@ -3,7 +3,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from agent_graph import investigation_graph
+from agent_graph import (
+    MINIMUM_CLEAR_GAP,
+    MINIMUM_CLEAR_PROBABILITY,
+    investigation_graph,
+)
+from diagnosis_map import DIAGNOSIS_MAP
 from failure_taxonomy import (
     FAILURE_REASONS,
     failure_domain_code,
@@ -11,272 +16,12 @@ from failure_taxonomy import (
     failure_reason_details,
 )
 from supabase_store import (
+    get_transaction,
     list_investigations,
     list_transactions,
     list_transactions_in_window,
     save_investigation,
 )
-
-
-# =========================================================
-# Synthetic Investigation Scenarios
-#
-# These are prototype transaction groups used when the
-# frontend sends only a natural-language question.
-#
-# Explicit transactions supplied by the API always take
-# priority over these scenario datasets.
-# =========================================================
-
-
-AMBIGUOUS_TRANSACTIONS = [
-    {
-        "transaction_id": "TXN1001",
-        "amount": 120.50,
-        "currency": "USD",
-        "merchant": "Store Alpha",
-        "status": "FAILED",
-        "response_code": "05",
-        "reason_code": "001",
-        "service": "authorization-service",
-    },
-    {
-        "transaction_id": "TXN1003",
-        "amount": 220.00,
-        "currency": "USD",
-        "merchant": "Store Gamma",
-        "status": "FAILED",
-        "response_code": "91",
-        "reason_code": None,
-        "service": "payment-gateway",
-    },
-    {
-        "transaction_id": "TXN1004",
-        "amount": 149.99,
-        "currency": "USD",
-        "merchant": "Store Delta",
-        "status": "FAILED",
-        "response_code": "05",
-        "reason_code": "002",
-        "service": "authorization-service",
-    },
-    {
-        "transaction_id": "TXN1005",
-        "amount": 89.40,
-        "currency": "USD",
-        "merchant": "Store Omega",
-        "status": "FAILED",
-        "response_code": "05",
-        "reason_code": "004",
-        "service": "authorization-service",
-    },
-    {
-        "transaction_id": "TXN1006",
-        "amount": 315.00,
-        "currency": "USD",
-        "merchant": "Store Omega",
-        "status": "FAILED",
-        "response_code": "05",
-        "reason_code": "005",
-        "service": "authorization-service",
-    },
-]
-
-
-ISSUER_TRANSACTIONS = [
-    {
-        "transaction_id": "ISS2001",
-        "amount": 100.00,
-        "currency": "USD",
-        "merchant": "Merchant A",
-        "status": "FAILED",
-        "response_code": "05",
-        "reason_code": "001",
-        "service": "authorization-service",
-    },
-    {
-        "transaction_id": "ISS2002",
-        "amount": 125.00,
-        "currency": "USD",
-        "merchant": "Merchant B",
-        "status": "FAILED",
-        "response_code": "05",
-        "reason_code": "001",
-        "service": "authorization-service",
-    },
-    {
-        "transaction_id": "ISS2003",
-        "amount": 80.00,
-        "currency": "USD",
-        "merchant": "Merchant C",
-        "status": "FAILED",
-        "response_code": "05",
-        "reason_code": "002",
-        "service": "authorization-service",
-    },
-    {
-        "transaction_id": "ISS2004",
-        "amount": 210.00,
-        "currency": "USD",
-        "merchant": "Merchant D",
-        "status": "FAILED",
-        "response_code": "05",
-        "reason_code": "001",
-        "service": "authorization-service",
-    },
-    {
-        "transaction_id": "ISS2005",
-        "amount": 55.00,
-        "currency": "USD",
-        "merchant": "Merchant E",
-        "status": "FAILED",
-        "response_code": "05",
-        "reason_code": "002",
-        "service": "authorization-service",
-    },
-    {
-        "transaction_id": "ISS2006",
-        "amount": 190.00,
-        "currency": "USD",
-        "merchant": "Merchant F",
-        "status": "FAILED",
-        "response_code": "05",
-        "reason_code": "001",
-        "service": "authorization-service",
-    },
-]
-
-
-MERCHANT_TRANSACTIONS = [
-    {
-        "transaction_id": "MER3001",
-        "amount": 90.00,
-        "currency": "USD",
-        "merchant": "Store Omega",
-        "status": "FAILED",
-        "response_code": "58",
-        "reason_code": "merchant_offline",
-        "service": "payment-gateway",
-    },
-    {
-        "transaction_id": "MER3002",
-        "amount": 110.00,
-        "currency": "USD",
-        "merchant": "Store Omega",
-        "status": "FAILED",
-        "response_code": "58",
-        "reason_code": "merchant_offline",
-        "service": "payment-gateway",
-    },
-    {
-        "transaction_id": "MER3003",
-        "amount": 145.00,
-        "currency": "USD",
-        "merchant": "Store Omega",
-        "status": "FAILED",
-        "response_code": "57",
-        "reason_code": "mcc_blocked",
-        "service": "payment-gateway",
-    },
-    {
-        "transaction_id": "MER3004",
-        "amount": 65.00,
-        "currency": "USD",
-        "merchant": "Store Omega",
-        "status": "FAILED",
-        "response_code": "57",
-        "reason_code": "mcc_blocked",
-        "service": "payment-gateway",
-    },
-]
-
-
-NETWORK_TRANSACTIONS = [
-    {
-        "transaction_id": "NET4001",
-        "amount": 75.00,
-        "currency": "USD",
-        "merchant": "Merchant A",
-        "status": "FAILED",
-        "response_code": "91",
-        "reason_code": None,
-        "service": "payment-gateway",
-    },
-    {
-        "transaction_id": "NET4002",
-        "amount": 130.00,
-        "currency": "USD",
-        "merchant": "Merchant B",
-        "status": "FAILED",
-        "response_code": "91",
-        "reason_code": None,
-        "service": "payment-gateway",
-    },
-    {
-        "transaction_id": "NET4003",
-        "amount": 245.00,
-        "currency": "USD",
-        "merchant": "Merchant C",
-        "status": "FAILED",
-        "response_code": "91",
-        "reason_code": None,
-        "service": "payment-gateway",
-    },
-    {
-        "transaction_id": "NET4004",
-        "amount": 55.00,
-        "currency": "USD",
-        "merchant": "Merchant D",
-        "status": "FAILED",
-        "response_code": "91",
-        "reason_code": None,
-        "service": "payment-gateway",
-    },
-]
-
-
-PAYMENT_SERVICE_TRANSACTIONS = [
-    {
-        "transaction_id": "PAY5001",
-        "amount": 60.00,
-        "currency": "USD",
-        "merchant": "Merchant A",
-        "status": "FAILED",
-        "response_code": "05",
-        "reason_code": None,
-        "service": "payment-gateway",
-    },
-    {
-        "transaction_id": "PAY5002",
-        "amount": 125.00,
-        "currency": "USD",
-        "merchant": "Merchant B",
-        "status": "FAILED",
-        "response_code": "91",
-        "reason_code": None,
-        "service": "payment-gateway",
-    },
-    {
-        "transaction_id": "PAY5003",
-        "amount": 185.00,
-        "currency": "USD",
-        "merchant": "Merchant C",
-        "status": "FAILED",
-        "response_code": "12",
-        "reason_code": None,
-        "service": "payment-gateway",
-    },
-    {
-        "transaction_id": "PAY5004",
-        "amount": 220.00,
-        "currency": "USD",
-        "merchant": "Merchant D",
-        "status": "FAILED",
-        "response_code": "12",
-        "reason_code": None,
-        "service": "payment-gateway",
-    },
-]
 
 
 # =========================================================
@@ -315,6 +60,309 @@ def is_payment_domain_question(
         term in question_lower
         for term in PAYMENT_DOMAIN_TERMS
     )
+
+
+# =========================================================
+# Single-Transaction Lookup
+#
+# A question that names a specific synthetic transaction ID
+# (e.g. "why did SIM-05BCD473606F fail") is about that one
+# transaction, not an aggregate batch. Detecting the ID lets
+# us answer directly from its already-known failure code
+# instead of pulling hundreds of unrelated transactions into
+# the ML root-cause pipeline.
+# =========================================================
+
+TRANSACTION_ID_PATTERN = re.compile(
+    r"\bSIM-[0-9A-F]{12}\b",
+    re.IGNORECASE,
+)
+
+
+def extract_transaction_id(
+    question: str,
+) -> Optional[str]:
+    match = TRANSACTION_ID_PATTERN.search(question)
+    return match.group(0).upper() if match else None
+
+
+def diagnosis_key_for_domain(
+    domain_code: Optional[str],
+) -> str:
+    if not domain_code:
+        return "unknown"
+
+    for key, info in DIAGNOSIS_MAP.items():
+        if domain_code in info.get("failure_domains", []):
+            return key
+
+    return "unknown"
+
+
+def build_transaction_not_found_response(
+    question: str,
+    transaction_id: str,
+) -> Dict[str, Any]:
+    investigation_id = "INV-" + uuid4().hex[:8].upper()
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    answer = (
+        f"No transaction with ID {transaction_id} was found in the "
+        "stored synthetic transaction records."
+    )
+
+    response = {
+        "investigation_id": investigation_id,
+        "created_at": created_at,
+        "question": question,
+        "question_intent": "single_transaction_lookup",
+        "status": "FACTUAL_ANSWER",
+        "scenario_id": "single_transaction_not_found",
+        "answer": answer,
+        "factual_result": {"answer": answer},
+        "human_escalation_required": False,
+        "root_cause_analysis_performed": False,
+        "note": (
+            "This question named a specific transaction ID, which was "
+            "looked up directly and not found."
+        ),
+    }
+
+    add_history_record(response)
+    return response
+
+
+def build_transaction_lookup_response(
+    question: str,
+    transaction: Dict[str, Any],
+) -> Dict[str, Any]:
+    transaction_id = transaction.get("transaction_id", "")
+    status = (transaction.get("status") or "").upper()
+
+    investigation_id = "INV-" + uuid4().hex[:8].upper()
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    if status != "FAILED":
+        answer = (
+            f"Transaction {transaction_id} did not fail — its recorded "
+            f"status is {status or 'UNKNOWN'}."
+        )
+
+        response = {
+            "investigation_id": investigation_id,
+            "created_at": created_at,
+            "question": question,
+            "question_intent": "single_transaction_lookup",
+            "status": "FACTUAL_ANSWER",
+            "scenario_id": "single_transaction_lookup_no_failure",
+            "answer": answer,
+            "factual_result": {"answer": answer},
+            "human_escalation_required": False,
+            "root_cause_analysis_performed": False,
+            "note": (
+                "This question named a specific transaction ID that did "
+                "not fail; no root-cause diagnosis was needed."
+            ),
+        }
+
+        add_history_record(response)
+        return response
+
+    reason_code = failure_reason_code(transaction)
+    domain_code = failure_domain_code(transaction)
+    diagnosis_key = diagnosis_key_for_domain(domain_code)
+    reason_details = failure_reason_details(reason_code)
+    merchant = transaction.get("merchant") or "Unknown merchant"
+
+    observed_evidence = {
+        "failure_count": 1,
+        "merchant_failure_counts": {merchant: 1},
+        "unique_affected_merchants": 1,
+        "most_affected_merchant": merchant,
+        "max_merchant_failure_count": 1,
+        "merchant_failure_concentration_ratio": 1.0,
+        "reason_code_counts": {reason_code: 1} if reason_code else {},
+        "service_failure_counts": {},
+        "note": (
+            f"Single-transaction lookup for {transaction_id}; no "
+            "aggregate batch was pulled."
+        ),
+    }
+
+    if diagnosis_key == "unknown":
+        response = {
+            "investigation_id": investigation_id,
+            "created_at": created_at,
+            "question": question,
+            "question_intent": "root_cause",
+            "status": "HUMAN_REVIEW_REQUIRED",
+            "scenario_id": "single_transaction_lookup",
+            "scenario_reason": (
+                f"Question named transaction {transaction_id} directly; "
+                "its failure code did not map to a known diagnosis "
+                "category."
+            ),
+            "observed_evidence": observed_evidence,
+            "ml_diagnosis": {
+                "predicted_cause": None,
+                "probabilities": {},
+                "top_probability": 0,
+                "second_probability": 0,
+                "probability_gap": 0,
+            },
+            "diagnosis_assessment": {
+                "assessment": "ambiguous",
+                "selected_paths": [],
+                "reason": (
+                    f"Transaction {transaction_id}'s failure reason code "
+                    f"({reason_code or 'unknown'}) does not map to any "
+                    "known diagnosis category."
+                ),
+                "minimum_clear_probability": MINIMUM_CLEAR_PROBABILITY,
+                "minimum_clear_gap": MINIMUM_CLEAR_GAP,
+                "evidence_map": {},
+            },
+            "investigation_plan": {
+                "selected_paths": [],
+                "agent_reasoning": (
+                    "Deterministic lookup found the transaction but its "
+                    "failure code is not represented in the diagnosis "
+                    "taxonomy."
+                ),
+                "evidence_map": {},
+            },
+            "response_code_analysis": (
+                {
+                    reason_code: {
+                        "count": 1,
+                        "meaning": reason_details["display_name"],
+                        "category": reason_details["domain_name"],
+                    }
+                }
+                if reason_code
+                else {}
+            ),
+            "evidence": [],
+            "investigation_report": (
+                f"Transaction {transaction_id} failed with reason code "
+                f"{reason_code or 'unknown'}, which does not map to a "
+                "known diagnosis category. Human review is required."
+            ),
+            "validation": {
+                "result": "VALIDATION STATUS: PASS (deterministic single-transaction lookup)",
+                "passed": True,
+            },
+            "recommendations": (
+                "Escalate for manual review — the failure code on this "
+                "transaction is not represented in the diagnosis taxonomy."
+            ),
+            "human_escalation_required": True,
+            "root_cause_analysis_performed": True,
+        }
+
+        add_history_record(response)
+        return response
+
+    causes = [key for key in DIAGNOSIS_MAP if key != "unknown"]
+    probabilities = {
+        cause: (1.0 if cause == diagnosis_key else 0.0)
+        for cause in causes
+    }
+    evidence_map = {
+        cause: {
+            "probability": probabilities[cause],
+            "evidence_strength": (
+                "strong" if cause == diagnosis_key else "negligible"
+            ),
+        }
+        for cause in causes
+    }
+    diagnosis_info = DIAGNOSIS_MAP[diagnosis_key]
+
+    llm_summary = (
+        f"Transaction {transaction_id} at merchant \"{merchant}\" failed "
+        f"with reason code {reason_code} ({reason_details['display_name']}), "
+        f"which falls under the {diagnosis_info['name']} category "
+        f"({diagnosis_info['description']}). Because this transaction's "
+        "failure code is already known, no aggregate pattern analysis "
+        "across other transactions was necessary."
+    )
+
+    recommendations = (
+        f"Treat this as a {diagnosis_info['name'].lower()}: review "
+        + (
+            ", ".join(diagnosis_info["services"])
+            if diagnosis_info["services"]
+            else "the relevant service"
+        )
+        + f" logs around this transaction's timestamp for reason code {reason_code}."
+    )
+
+    response = {
+        "investigation_id": investigation_id,
+        "created_at": created_at,
+        "question": question,
+        "question_intent": "root_cause",
+        "status": "AI_ASSISTED_DIAGNOSIS",
+        "scenario_id": "single_transaction_lookup",
+        "scenario_reason": (
+            f"Question named transaction {transaction_id} directly; it "
+            "was looked up by ID instead of using an aggregate batch."
+        ),
+        "observed_evidence": observed_evidence,
+        "ml_diagnosis": {
+            "predicted_cause": diagnosis_key,
+            "probabilities": probabilities,
+            "top_probability": 1.0,
+            "second_probability": 0.0,
+            "probability_gap": 1.0,
+        },
+        "diagnosis_assessment": {
+            "assessment": "clear",
+            "selected_paths": [diagnosis_key],
+            "reason": (
+                f"Transaction {transaction_id}'s failure reason code "
+                f"{reason_code} maps directly to {diagnosis_info['name']} "
+                "in the failure taxonomy."
+            ),
+            "minimum_clear_probability": MINIMUM_CLEAR_PROBABILITY,
+            "minimum_clear_gap": MINIMUM_CLEAR_GAP,
+            "evidence_map": evidence_map,
+        },
+        "investigation_plan": {
+            "selected_paths": [diagnosis_key],
+            "agent_reasoning": (
+                "Deterministic lookup: the question named a specific "
+                "transaction ID with an already-known failure code, so "
+                "the taxonomy mapping was used directly instead of the "
+                "aggregate ML pipeline."
+            ),
+            "evidence_map": evidence_map,
+        },
+        "response_code_analysis": (
+            {
+                reason_code: {
+                    "count": 1,
+                    "meaning": reason_details["display_name"],
+                    "category": reason_details["domain_name"],
+                }
+            }
+            if reason_code
+            else {}
+        ),
+        "evidence": [],
+        "investigation_report": llm_summary,
+        "validation": {
+            "result": "VALIDATION STATUS: PASS (deterministic single-transaction lookup)",
+            "passed": True,
+        },
+        "recommendations": recommendations,
+        "human_escalation_required": False,
+        "root_cause_analysis_performed": True,
+    }
+
+    add_history_record(response)
+    return response
 
 
 # =========================================================
@@ -721,6 +769,16 @@ def select_root_cause_evidence(
         )
         scopes.append(date_window["label"])
 
+    # Keep the evidence set deterministic and make the most recently stored
+    # matching authorization the first record considered by the investigation.
+    # Supabase normally returns this order already, but an explicit sort keeps
+    # it correct after every reason/domain/date filter and for caller-supplied
+    # transaction lists.
+    selected.sort(
+        key=lambda transaction: str(transaction.get("created_at") or ""),
+        reverse=True,
+    )
+
     if scopes:
         return selected, "Applied question scope: " + "; ".join(scopes) + "."
     return selected, "No specific scope was requested; using the latest transaction set."
@@ -1056,172 +1114,6 @@ def build_factual_answer(
 
 
 # =========================================================
-# Synthetic Scenario Routing
-# =========================================================
-
-def select_synthetic_scenario(
-    question: str,
-) -> Dict[str, Any]:
-    """
-    Prototype-only deterministic routing from the natural
-    language question to a synthetic transaction scenario.
-
-    Used only for root-cause investigations when explicit
-    transactions are not supplied.
-    """
-
-    question_lower = (
-        question.lower()
-    )
-
-
-    # -----------------------------------------------------
-    # Network / Switch
-    # -----------------------------------------------------
-
-    network_terms = [
-        "switch unavailable",
-        "switch issue",
-        "network issue",
-        "network failure",
-        "network connectivity",
-        "code 91",
-        "issuer availability",
-        "issuer or switch unavailable",
-    ]
-
-    if any(
-        term in question_lower
-        for term in network_terms
-    ):
-        return {
-            "scenario_id":
-                "network_switch_issue",
-
-            "scenario_reason": (
-                "Question explicitly references network, "
-                "switch or availability conditions."
-            ),
-
-            "transactions":
-                NETWORK_TRANSACTIONS,
-        }
-
-
-    # -----------------------------------------------------
-    # Merchant
-    # -----------------------------------------------------
-
-    merchant_terms = [
-        "invalid merchant",
-        "merchant configuration",
-        "merchant issue",
-        "merchant problem",
-        "specific merchant",
-        "store omega",
-        "reason code 004",
-    ]
-
-    if any(
-        term in question_lower
-        for term in merchant_terms
-    ):
-        return {
-            "scenario_id":
-                "merchant_issue",
-
-            "scenario_reason": (
-                "Question explicitly references merchant-specific "
-                "or merchant-configuration conditions."
-            ),
-
-            "transactions":
-                MERCHANT_TRANSACTIONS,
-        }
-
-
-    # -----------------------------------------------------
-    # Payment Service / Gateway
-    # -----------------------------------------------------
-
-    service_terms = [
-        "payment service",
-        "payment gateway",
-        "gateway issue",
-        "gateway failure",
-        "processing service",
-        "internal service",
-    ]
-
-    if any(
-        term in question_lower
-        for term in service_terms
-    ):
-        return {
-            "scenario_id":
-                "payment_service_issue",
-
-            "scenario_reason": (
-                "Question explicitly references payment-service "
-                "or gateway processing conditions."
-            ),
-
-            "transactions":
-                PAYMENT_SERVICE_TRANSACTIONS,
-        }
-
-
-    # -----------------------------------------------------
-    # Issuer
-    # -----------------------------------------------------
-
-    issuer_terms = [
-        "issuer decline",
-        "issuer issue",
-        "issuer problem",
-        "code 05",
-        "response code 05",
-        "authorization decline",
-        "authorisation decline",
-    ]
-
-    if any(
-        term in question_lower
-        for term in issuer_terms
-    ):
-        return {
-            "scenario_id":
-                "issuer_issue",
-
-            "scenario_reason": (
-                "Question explicitly references issuer decline "
-                "or issuer-decision conditions."
-            ),
-
-            "transactions":
-                ISSUER_TRANSACTIONS,
-        }
-
-
-    # -----------------------------------------------------
-    # Generic Root-Cause Investigation
-    # -----------------------------------------------------
-
-    return {
-        "scenario_id":
-            "mixed_ambiguous",
-
-        "scenario_reason": (
-            "No specific synthetic failure scenario was requested. "
-            "Using the mixed payment-failure dataset."
-        ),
-
-        "transactions":
-            AMBIGUOUS_TRANSACTIONS,
-    }
-
-
-# =========================================================
 # History Helpers
 # =========================================================
 
@@ -1372,6 +1264,33 @@ def run_investigation(
     ] = None,
     timezone_offset_minutes: int = 0,
 ) -> Dict[str, Any]:
+
+    # -----------------------------------------------------
+    # Single-Transaction Lookup
+    #
+    # A question naming a specific transaction ID is about
+    # that one transaction, not an aggregate batch — answer
+    # it directly from the transaction's own known failure
+    # code instead of pulling hundreds of unrelated rows
+    # into the ML root-cause pipeline.
+    # -----------------------------------------------------
+
+    transaction_id = extract_transaction_id(question)
+
+    if transaction_id is not None:
+        looked_up_transaction = get_transaction(transaction_id)
+
+        if looked_up_transaction is None:
+            return build_transaction_not_found_response(
+                question,
+                transaction_id,
+            )
+
+        return build_transaction_lookup_response(
+            question,
+            looked_up_transaction,
+        )
+
 
     # -----------------------------------------------------
     # Domain Guardrail
