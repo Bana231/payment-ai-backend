@@ -1,3 +1,11 @@
+# This file is the "front door" of the whole backend — it's the only file
+# that defines actual web addresses (routes) the frontend can call, like
+# /api/investigate or /api/transactions. Every route here is deliberately
+# thin: it just reads the incoming request, calls into another file that
+# does the real work (investigation_service.py, supabase_store.py, etc.),
+# and hands the result back as JSON.
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -9,13 +17,23 @@ from investigation_service import (
     get_investigation_history,
     run_investigation,
 )
-from supabase_store import list_knowledge_documents, list_transactions
+from ml_diagnosis import retrain_model
+from rag.retriever import refresh_index
+from supabase_store import (
+    add_ml_training_example,
+    create_knowledge_document,
+    list_knowledge_documents,
+    list_transactions,
+    submit_investigation_feedback,
+)
 
 
 # =========================================================
 # FastAPI
 # =========================================================
 
+# Creates the actual web server application. Everything below registers
+# routes onto this one `app` object.
 app = FastAPI(
     title="PayOps Sentinel API",
     description=(
@@ -30,6 +48,10 @@ app = FastAPI(
 # CORS
 # =========================================================
 
+# By default, a browser blocks a webpage from calling an API running on a
+# different port (e.g. the frontend on :8080 calling this backend on
+# :8000) — this explicitly allows exactly those specific local addresses
+# to call in, and nothing else.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -52,6 +74,10 @@ app.add_middleware(
 # Paths
 # =========================================================
 
+# NOTE: this folder-based knowledge base is LEGACY/UNUSED. The functions
+# further down that read from it (load_knowledge_documents and friends)
+# are never actually called by the live /api/knowledge-base route below —
+# that route reads from Supabase instead. Kept only for reference.
 KNOWLEDGE_BASE_DIR = Path(
     "knowledge_base"
 )
@@ -60,7 +86,12 @@ KNOWLEDGE_BASE_DIR = Path(
 # =========================================================
 # Request Models
 # =========================================================
+# Each class below defines exactly what a request body must look like for
+# one route — FastAPI automatically rejects a request that doesn't match
+# (e.g. missing a required field) before our own code even runs.
 
+# One synthetic transaction, as sent by a caller providing its own
+# transaction list instead of using whatever's already stored in Supabase.
 class TransactionInput(BaseModel):
     transaction_id: str
     amount: float
@@ -72,6 +103,10 @@ class TransactionInput(BaseModel):
     service: str
 
 
+# The body of a POST /api/investigate request — a plain-English question,
+# optionally an explicit list of transactions to investigate instead of
+# pulling from Supabase, and the caller's timezone (so date words like
+# "today" resolve to the asker's actual calendar day).
 class InvestigationRequest(BaseModel):
     question: str = Field(
         ...,
@@ -97,10 +132,47 @@ class InvestigationRequest(BaseModel):
     )
 
 
+# The body of a human reviewer's feedback on one investigation — did they
+# confirm the AI's diagnosis, override it with a different cause, or
+# reject it outright?
+class InvestigationFeedbackInput(BaseModel):
+    decision: str = Field(
+        ...,
+        description="One of: confirmed, overridden, rejected.",
+    )
+    cause: Optional[str] = Field(
+        default=None,
+        description=(
+            "The diagnosis key the reviewer confirms or overrides to "
+            "(e.g. issuer_issue). Required for 'confirmed'/'overridden'."
+        ),
+    )
+    notes: Optional[str] = None
+    reviewer: Optional[str] = None
+
+
+# The body of a "create/update a knowledge base document" request — used
+# by the Knowledge Base page's "+" button.
+class KnowledgeDocumentInput(BaseModel):
+    title: str = Field(..., min_length=1)
+    category: str = Field(default="Policy", min_length=1)
+    tags: List[str] = Field(default_factory=list)
+    content: str = Field(..., min_length=1)
+    slug: Optional[str] = Field(
+        default=None,
+        description=(
+            "URL-safe identifier. Auto-derived from the title when omitted. "
+            "Posting an existing slug updates that document in place."
+        ),
+    )
+
+
 # =========================================================
 # Health
 # =========================================================
 
+# The simplest possible route — just proves the server is alive and
+# responding. Used by monitoring/uptime checks, not the app itself.
 @app.get("/health")
 def health_check():
     return {
@@ -113,11 +185,20 @@ def health_check():
 # Investigation
 # =========================================================
 
+# The main entry point of the whole system — takes a plain-English
+# question and returns either a direct factual answer or a full
+# root-cause investigation report. All the actual thinking happens in
+# investigation_service.run_investigation(); this route just calls it
+# and translates its one special error (out-of-scope questions) into a
+# proper HTTP error the frontend can show nicely.
 @app.post("/api/investigate")
 def investigate(
     request: InvestigationRequest,
 ) -> Dict[str, Any]:
 
+    # If the caller supplied their own transaction list, convert each one
+    # from a validated Pydantic object into a plain dictionary. Otherwise
+    # leave this as None, meaning "pull transactions from Supabase instead".
     transactions = None
 
     if request.transactions is not None:
@@ -137,6 +218,10 @@ def investigate(
     except ValueError as error:
         message = str(error)
 
+        # run_investigation raises a plain ValueError starting with this
+        # exact prefix when a question isn't about payments at all (e.g.
+        # "what's the weather") — turn that into a proper 422 response
+        # instead of a generic crash.
         if message.startswith(
             "OUT_OF_SCOPE:"
         ):
@@ -155,6 +240,8 @@ def investigate(
 # Investigation History
 # =========================================================
 
+# Returns the most recent past investigations — this is what powers the
+# "recent questions" list and any history/audit views in the frontend.
 @app.get("/api/investigations")
 def investigation_history(
     limit: int = 20,
@@ -175,6 +262,72 @@ def investigation_history(
     }
 
 
+# Lets a human reviewer confirm, override, or reject a specific
+# investigation's diagnosis. When they confirm or override with a real
+# cause, this also feeds that labelled example back into the ML training
+# set and retrains the model immediately, so the model can actually learn
+# from human review instead of the feedback being purely cosmetic.
+@app.post("/api/investigations/{investigation_id}/feedback")
+def submit_investigation_feedback_route(
+    investigation_id: str,
+    feedback: InvestigationFeedbackInput,
+) -> Dict[str, Any]:
+
+    # Basic input validation before touching the database at all.
+    if feedback.decision not in {"confirmed", "overridden", "rejected"}:
+        raise HTTPException(
+            status_code=422,
+            detail="decision must be one of: confirmed, overridden, rejected.",
+        )
+
+    if feedback.decision in {"confirmed", "overridden"} and not feedback.cause:
+        raise HTTPException(
+            status_code=422,
+            detail="cause is required when decision is confirmed or overridden.",
+        )
+
+    # Actually save the reviewer's decision onto that investigation's row.
+    updated = submit_investigation_feedback(
+        investigation_id,
+        {
+            "human_feedback_decision": feedback.decision,
+            "human_feedback_cause": feedback.cause,
+            "human_feedback_notes": feedback.notes,
+            "human_feedback_reviewer": feedback.reviewer,
+            "human_feedback_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+    if updated is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No investigation found with id {investigation_id}.",
+        )
+
+    # Close the loop: a confirmed/overridden human decision is a genuine
+    # labelled example, so feed it back into the training set and retrain
+    # immediately, rather than caching this one question's answer. A single
+    # added example has a modest effect on a 400+-example Random Forest —
+    # this is a real feedback loop, not an instant fix for one question.
+    training_example_added = False
+    diagnostic_features = updated.get("diagnostic_features")
+
+    if (
+        feedback.decision in {"confirmed", "overridden"}
+        and diagnostic_features
+    ):
+        add_ml_training_example(feedback.cause, diagnostic_features)
+        retrain_model()
+        training_example_added = True
+
+    updated["ml_training_example_added"] = training_example_added
+
+    return updated
+
+
+# Returns the stored synthetic transactions, capped at 5000 regardless
+# of what's asked for, to keep responses reasonably sized. Powers the
+# Dashboard and Transactions pages.
 @app.get("/api/transactions")
 def transaction_history(
     limit: int = 100,
@@ -193,6 +346,12 @@ def transaction_history(
 # =========================================================
 # Knowledge Base Helpers
 # =========================================================
+# UNUSED / LEGACY: everything in this section (down to
+# load_knowledge_documents) was written for an earlier version of the app
+# that read knowledge-base documents from local .txt/.md files on disk.
+# The live /api/knowledge-base route below no longer calls any of these —
+# it reads documents from Supabase instead (via list_knowledge_documents
+# in supabase_store.py). Left here for reference only; safe to ignore.
 
 def clean_title(
     file_path: Path,
@@ -451,6 +610,9 @@ def load_knowledge_documents() -> List[
 # Knowledge Base API
 # =========================================================
 
+# Returns every RAG knowledge-base document (runbooks + policies) stored
+# in Supabase — this is what the Knowledge Base page displays, and it's
+# also the same source rag/retriever.py embeds for investigation retrieval.
 @app.get("/api/knowledge-base")
 def knowledge_base() -> Dict[str, Any]:
 
@@ -469,3 +631,40 @@ def knowledge_base() -> Dict[str, Any]:
         "documents":
             documents,
     }
+
+
+# Turns a human-readable title like "My New Policy!" into a safe,
+# URL-friendly identifier like "my-new-policy" — lowercase, no
+# punctuation, words joined with hyphens.
+def slugify(title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", title.strip().lower())
+    return slug.strip("-") or "document"
+
+
+# Adds a new knowledge-base document (or overwrites an existing one with
+# the same slug) — this is what the Knowledge Base page's "+" button
+# calls. After saving, it immediately rebuilds the in-memory RAG search
+# index (refresh_index) so the new content is searchable right away
+# instead of only after a server restart.
+@app.post("/api/knowledge-base")
+def create_knowledge_base_document(
+    document: KnowledgeDocumentInput,
+) -> Dict[str, Any]:
+
+    slug = document.slug or slugify(document.title)
+
+    record = create_knowledge_document(
+        {
+            "slug": slug,
+            "title": document.title,
+            "category": document.category,
+            "tags": document.tags,
+            "content": document.content,
+        }
+    )
+
+    # New/edited content is invisible to RAG retrieval until the in-memory
+    # chunk index is rebuilt — it's only computed once at process import time.
+    refresh_index()
+
+    return record

@@ -5,13 +5,29 @@ from rag_loader import load_runbook, split_into_chunks
 
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
-document = load_runbook()
-chunks = split_into_chunks(document)
+chunks: list[str] = []
+chunk_embeddings = None
 
-chunk_embeddings = model.encode(
-    chunks,
-    convert_to_tensor=True,
-)
+
+def refresh_index() -> None:
+    """Reload knowledge_documents from Supabase and re-embed all chunks.
+
+    Chunks/embeddings are computed once at import time for speed, so any
+    document added after that (e.g. via the knowledge-base API) is invisible
+    to retrieval until this is called.
+    """
+    global chunks, chunk_embeddings
+
+    document = load_runbook()
+    chunks = split_into_chunks(document)
+
+    chunk_embeddings = model.encode(
+        chunks,
+        convert_to_tensor=True,
+    )
+
+
+refresh_index()
 
 
 def retrieve_relevant_chunks(question: str, top_k: int = 2):

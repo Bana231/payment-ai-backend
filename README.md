@@ -41,7 +41,7 @@ The offline flags avoid optional Hugging Face metadata requests when the sentenc
 
 ## Supabase database
 
-Run `supabase/migrations/20260826_initial_schema.sql` in the Supabase SQL Editor, then add these server-only values to `.env`:
+Run `supabase/migrations/20260913_schema.sql` in the Supabase SQL Editor — it is the complete, consolidated schema (every table, index, and seed row) and the only migration file this project has. Then add these server-only values to `.env`:
 
 ```env
 SUPABASE_URL=https://your-project.supabase.co
@@ -50,11 +50,9 @@ SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 
 Investigation history is stored in Supabase, and saved synthetic authorization records are available through the transactions endpoint. Never expose the service-role key to the frontend or store real cardholder data.
 
-Run `supabase/migrations/20260831_payment_failure_catalog.sql` to add the shared synthetic failure-code catalog used by the simulator and UI.
+The script is DESTRUCTIVE — it drops and recreates every PayOps Sentinel table — so review it before running, and only run it once per project (re-running wipes and reseeds everything back to the bootstrap state).
 
-For a fresh, destructive rebuild of only the PayOps tables, use `supabase/migrations/20260831_reset_and_rebuild.sql`. It includes the ordered failure taxonomy and the minimum synthetic RAG/ML seed data required for the current backend to start.
-
-Synthetic transactions, runbook documents, and ML training examples are stored in Supabase. Do not commit local copies of those datasets. `ml_training_examples` is seeded from `synthetic_ml_dataset.json` (see "Evaluation and regression checks" below) rather than the minimal placeholder rows in the reset script — reseed it after a fresh rebuild if you want the model to train on the full 400-example set instead of the reset script's bootstrap examples.
+Synthetic transactions, runbook documents, and ML training examples are stored in Supabase. Do not commit local copies of those datasets. `ml_training_examples` is seeded from `synthetic_ml_dataset.json` (see "Evaluation and regression checks" below) rather than the minimal placeholder rows in the schema script — reseed it after running the script if you want the model to train on the full 400-example set instead of the bootstrap examples.
 
 ## API
 

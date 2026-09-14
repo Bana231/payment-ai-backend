@@ -1,4 +1,9 @@
-from typing import TypedDict, List, Dict, Any
+# This file defines the actual step-by-step pipeline (the "LangGraph")
+# that a root-cause investigation runs through — think of it like a
+# flowchart where each function below is one box, and the wiring at the
+# very bottom of the file (graph_builder.add_node / add_edge) draws the
+# arrows connecting those boxes in the exact order they really run.
+from typing import TypedDict, List, Dict, Any, Optional
 
 from langgraph.graph import StateGraph, START, END
 
@@ -21,6 +26,10 @@ from llm_service import (
 # Shared State
 # =========================================================
 
+# This is the one "shopping cart" that gets passed from step to step —
+# every node function below reads some of these fields and adds new ones
+# as it finishes its job. `total=False` means no field is required to
+# exist yet at any given point (early on, most of these are still empty).
 class InvestigationState(TypedDict, total=False):
     question: str
 
@@ -37,6 +46,34 @@ class InvestigationState(TypedDict, total=False):
 
     dominant_failure_codes: List[str]
     root_cause_hypothesis: List[str]
+
+    # Domain-level rollup (see analyze_response_codes): groups the exact
+    # reason codes above (e.g. "F06.01") up to their parent domain (e.g.
+    # "F06") and totals them, so the LLM steps below get one clear,
+    # pre-computed "biggest domain" answer instead of having to add up
+    # scattered per-code numbers themselves.
+    domain_failure_totals: Dict[str, int]
+    dominant_domain: str
+    dominant_domain_summary: str
+
+    # Sub-root-cause (see analyze_response_codes): one level MORE specific
+    # than dominant_domain above — the exact reason code (e.g. "F06.01",
+    # not just "F06") that dominates, but ONLY filled in when one single
+    # code clearly accounts for most of the failures. If no single code
+    # is that dominant (failures are spread across several reasons), both
+    # of these stay None rather than guessing.
+    sub_root_cause_code: Optional[str]
+    sub_root_cause_summary: Optional[str]
+
+    # Confirmed root cause (see analyze_response_codes' Step 4): the
+    # taxonomy's OWN definition of which category the dominant domain
+    # belongs to (e.g. "F08" -> "payment_service_issue" per
+    # diagnosis_map.py), used to override the ML model's independent
+    # guess whenever one domain clearly dominates. This is a fixed
+    # DEFINITION, not a statistical estimate, so it takes priority over
+    # ml_diagnosis.predicted_cause when both are present.
+    confirmed_root_cause: Optional[str]
+    confirmed_root_cause_summary: Optional[str]
 
     diagnosis_assessment: Dict[str, Any]
     investigation_plan: Dict[str, Any]
@@ -107,6 +144,8 @@ def grade_evidence_strength(
     alternative from noise instead of reporting both as equally "ambiguous".
     """
 
+    # This cause is the model's top pick AND clears both confidence bars
+    # above — this is the one and only way to earn a "strong" grade.
     if (
         is_top_cause
         and probability >= MINIMUM_CLEAR_PROBABILITY
@@ -114,11 +153,18 @@ def grade_evidence_strength(
     ):
         return "strong"
 
+    # "Uninformative baseline" = what a purely random guess would score —
+    # e.g. with 4 possible causes, randomly guessing gets it right 25% of
+    # the time. Everything below compares this cause's real probability
+    # against that random-guess baseline instead of against a fixed number.
     baseline = 1 / num_causes if num_causes else 0
 
+    # Barely better (or worse) than a random guess — basically no signal.
     if not baseline or probability <= baseline * WEAK_EVIDENCE_LIFT:
         return "negligible"
 
+    # Better than random, but still well short of "strong" — a real but
+    # modest signal.
     if probability <= baseline * MODERATE_EVIDENCE_LIFT:
         return "weak"
 
@@ -128,6 +174,12 @@ def grade_evidence_strength(
 # RAG Path Relevance
 # =========================================================
 
+# A scoring dictionary used later (see calculate_path_relevance) to decide
+# how relevant a retrieved runbook passage is to a specific diagnosis
+# path. For each path (e.g. "merchant_issue"), it lists phrases that would
+# likely appear in a genuinely relevant passage, each worth a point value
+# — the more/stronger phrases a passage contains, the more relevant it's
+# considered to that path. This is plain keyword matching, not AI.
 PATH_RELEVANCE_TERMS = {
     "merchant_issue": {
         "merchant configuration": 3,
@@ -186,6 +238,10 @@ PATH_RELEVANCE_TERMS = {
 # Transaction Analysis
 # =========================================================
 
+# First real step of the pipeline: load the transactions to investigate
+# (whatever was already put in state, else the latest 500 from Supabase),
+# then keep only the FAILED ones — everything downstream only cares about
+# failures.
 def analyze_transactions(
     state: InvestigationState,
 ):
@@ -200,6 +256,8 @@ def analyze_transactions(
         if txn.get("status") == "FAILED"
     ]
 
+    # Running tallies built up one failed transaction at a time below:
+    # how many failures per merchant, per reason code, per service.
     merchant_failure_counts = {}
     reason_code_counts = {}
     service_failure_counts = {}
@@ -253,6 +311,8 @@ def analyze_transactions(
         merchant_failure_counts
     )
 
+    # Find whichever single merchant has the most failures, and how many
+    # — this is the "one merchant is causing most of the pain" signal.
     if merchant_failure_counts:
 
         most_affected_merchant = max(
@@ -271,6 +331,9 @@ def analyze_transactions(
         most_affected_merchant = None
         max_merchant_failure_count = 0
 
+    # What fraction of ALL failures belong to that single top merchant —
+    # e.g. 0.8 means "80% of failures are this one merchant", a strong
+    # hint the problem is merchant-specific rather than network-wide.
     merchant_failure_concentration_ratio = (
         max_merchant_failure_count
         / failure_count
@@ -278,6 +341,9 @@ def analyze_transactions(
         else 0
     )
 
+    # Bundle everything computed above into one evidence dictionary that
+    # gets handed to the LLM later so it can quote real numbers instead
+    # of guessing.
     observed_transaction_evidence = {
         "failure_count":
             failure_count,
@@ -326,6 +392,9 @@ def analyze_transactions(
 # Feature Extraction
 # =========================================================
 
+# Second step: turn the raw failed-transaction list from Node 1 into the
+# fixed 14-number feature vector the ML model understands (see
+# feature_extractor.py for exactly what each number means).
 def extract_features(
     state: InvestigationState,
 ):
@@ -349,6 +418,8 @@ def extract_features(
 # ML Diagnosis
 # =========================================================
 
+# Third step: hand Node 2's 14 numbers to the trained Random Forest (see
+# ml_diagnosis.py's diagnose()) and store back whatever it predicts.
 def run_ml_diagnosis(
     state: InvestigationState,
 ):
@@ -370,6 +441,11 @@ def run_ml_diagnosis(
 # Quantitative Diagnosis Assessment
 # =========================================================
 
+# Fourth step: decide whether the ML model's answer is confident enough to
+# treat as "clear" (one obvious cause) or whether it's "ambiguous" (needs
+# the LLM to weigh multiple candidate causes). This is the
+# coverage-vs-confidence policy check using MINIMUM_CLEAR_PROBABILITY /
+# MINIMUM_CLEAR_GAP defined near the top of this file.
 def assess_ml_diagnosis(
     state: InvestigationState,
 ):
@@ -393,6 +469,8 @@ def assess_ml_diagnosis(
         0,
     )
 
+    # Sort every possible cause from most to least likely so we can pull
+    # out "the top 2 candidates" next.
     ranked_probabilities = sorted(
         probabilities.items(),
         key=lambda item: item[1],
@@ -413,6 +491,9 @@ def assess_ml_diagnosis(
 
     num_causes = len(probabilities) or 1
 
+    # Grade how strong the evidence is for EACH possible cause (not just
+    # the winner) — used later so the report can say "moderate evidence
+    # for X" instead of just a bare number.
     evidence_map = {
         label: {
             "probability": probability,
@@ -426,6 +507,10 @@ def assess_ml_diagnosis(
         for label, probability in probabilities.items()
     }
 
+    # The actual policy check: both the top probability AND the gap to
+    # the runner-up must clear their thresholds for us to call this
+    # "clear" — high confidence alone isn't enough if a close second
+    # place cause exists.
     if (
         top_probability
         >= MINIMUM_CLEAR_PROBABILITY
@@ -493,6 +578,11 @@ def assess_ml_diagnosis(
 def analyze_response_codes(
     state: InvestigationState,
 ):
+    # ---------------------------------------------------------------
+    # STEP 1: Count how many failed transactions used each exact
+    # reason code (e.g. "F06.01", "F08.02"). This is a simple tally —
+    # every failed transaction adds 1 to its own reason code's count.
+    # ---------------------------------------------------------------
     failed_transactions = state.get(
         "failed_transactions",
         [],
@@ -534,6 +624,46 @@ def analyze_response_codes(
                 code_info["domain_name"],
         }
 
+    # ---------------------------------------------------------------
+    # STEP 2: Roll the exact reason codes up to their parent DOMAIN
+    # (the first 3 characters, e.g. "F06.01" and "F06.02" both belong
+    # to domain "F06"). This matters because a domain's failures are
+    # often spread across several specific reason codes — e.g. 217
+    # "F06.01" + 74 "F06.02" + 4 "F06.03" = 295 total F06 failures.
+    # Computing the domain totals here, once, deterministically, and
+    # handing them to the LLM directly means it never has to add up
+    # scattered per-code numbers itself to figure out which domain is
+    # biggest.
+    # ---------------------------------------------------------------
+    domain_failure_totals: Dict[str, int] = {}
+
+    for code, count in response_code_counts.items():
+
+        domain_code = code[:3]
+
+        domain_failure_totals[domain_code] = (
+            domain_failure_totals.get(
+                domain_code,
+                0,
+            )
+            + count
+        )
+
+    # dominant_domain is simply whichever domain has the highest total
+    # above — this is a plain "which number is biggest" calculation
+    # done once in Python, so neither the report-writing LLM nor the
+    # critic LLM ever has to work it out (and potentially get it wrong).
+    if domain_failure_totals:
+
+        dominant_domain = max(
+            domain_failure_totals,
+            key=domain_failure_totals.get,
+        )
+
+    else:
+
+        dominant_domain = None
+
     if response_code_counts:
 
         max_count = max(
@@ -561,6 +691,128 @@ def analyze_response_codes(
             f"{code}: {code_info['display_name']}."
         )
 
+    # A single, unambiguous plain-English sentence stating the biggest
+    # domain and its share of all failures — this is the sentence that
+    # gets handed straight to both the report-writer and the critic so
+    # there is one deterministic, pre-computed fact they can both check
+    # their own claims against, instead of re-deriving it themselves.
+    dominant_domain_summary = None
+    # Declared here (not just inside the "if dominant_domain" block below)
+    # because Step 4 further down also needs this same share number.
+    dominant_domain_share = 0
+
+    if dominant_domain:
+
+        total_failures = sum(
+            domain_failure_totals.values()
+        )
+
+        dominant_domain_share = (
+            domain_failure_totals[dominant_domain] /
+            total_failures
+            if total_failures
+            else 0
+        )
+
+        dominant_domain_summary = (
+            f"Domain {dominant_domain} accounts for "
+            f"{domain_failure_totals[dominant_domain]} of "
+            f"{total_failures} failed transactions "
+            f"({dominant_domain_share * 100:.1f}%), the largest "
+            "share of any single domain."
+        )
+
+    # ---------------------------------------------------------------
+    # STEP 3: Sub-root-cause — one level MORE specific than the domain
+    # above. dominant_failure_codes (from Step 2) already names the
+    # single EXACT reason code with the most failures (e.g. "F06.01",
+    # not just "F06"). We only call this a confirmed "sub root cause"
+    # when it's a clean, unambiguous winner: exactly one code tied for
+    # the top spot (no tie with another code), AND that one code alone
+    # covers at least half of all failures. If failures are spread out
+    # instead (no single code dominant enough), this stays None rather
+    # than naming a code that isn't actually confirmed by the data.
+    # ---------------------------------------------------------------
+    sub_root_cause_code = None
+    sub_root_cause_summary = None
+
+    if (
+        len(dominant_failure_codes) == 1
+        and response_code_counts
+    ):
+
+        candidate_code = dominant_failure_codes[0]
+        total_reason_failures = sum(
+            response_code_counts.values()
+        )
+        candidate_share = (
+            response_code_counts[candidate_code] /
+            total_reason_failures
+            if total_reason_failures
+            else 0
+        )
+
+        if candidate_share >= 0.5:
+
+            sub_root_cause_code = candidate_code
+            candidate_info = failure_reason_details(candidate_code)
+
+            sub_root_cause_summary = (
+                f"The specific failure reason {candidate_code} "
+                f"({candidate_info['display_name']}) accounts for "
+                f"{response_code_counts[candidate_code]} of "
+                f"{total_reason_failures} failed transactions "
+                f"({candidate_share * 100:.1f}%), a clear majority — "
+                "confirmed as the sub root cause, not just a guess."
+            )
+
+    # ---------------------------------------------------------------
+    # STEP 4: Confirmed root cause, PER YOUR TAXONOMY — not per the ML
+    # model's independent guess. The ML classifier (Node 3/4 above) can
+    # disagree with what the taxonomy itself says a domain means (e.g. it
+    # once favored "issuer_issue" for an F08-dominant batch, even though
+    # F08 is defined in diagnosis_map.py as belonging to
+    # payment_service_issue) — the ML is a statistical estimate that can
+    # be wrong or unreliable at unusual scales, but the taxonomy mapping
+    # is a fixed, deterministic DEFINITION, not a guess. So: whenever one
+    # domain clearly dominates (same >=50% bar as sub-root-cause above)
+    # AND that domain maps to exactly one of the 4 root-cause categories,
+    # THAT is reported as the confirmed root cause — overriding, not
+    # supplementing, the ML's predicted_cause in the final report. If no
+    # domain is that dominant, or it doesn't map to any category, this
+    # stays None and the ML signal remains the only available answer.
+    # ---------------------------------------------------------------
+    confirmed_root_cause = None
+    confirmed_root_cause_summary = None
+
+    if dominant_domain and dominant_domain_share >= 0.5:
+
+        diagnosis_map = get_diagnosis_map()
+
+        matching_categories = [
+            category_key
+            for category_key, category_info in diagnosis_map.items()
+            if dominant_domain in category_info.get("failure_domains", [])
+        ]
+
+        # Only confirm when the domain maps to EXACTLY one category — if
+        # it were somehow in two categories' domain lists at once (not
+        # currently possible with today's taxonomy, but checked anyway),
+        # that would no longer be an unambiguous answer.
+        if len(matching_categories) == 1:
+
+            confirmed_root_cause = matching_categories[0]
+            category_name = diagnosis_map[confirmed_root_cause]["name"]
+
+            confirmed_root_cause_summary = (
+                f"Domain {dominant_domain} maps to \"{category_name}\" "
+                f"in the failure taxonomy (diagnosis_map.py), and "
+                f"accounts for {dominant_domain_share * 100:.1f}% of "
+                "failures — confirmed as the root cause per the "
+                "taxonomy's own definition, regardless of what the ML "
+                "model's probabilities alone suggest."
+            )
+
     return {
         "response_code_counts":
             response_code_counts,
@@ -573,6 +825,32 @@ def analyze_response_codes(
 
         "root_cause_hypothesis":
             root_cause_hypothesis,
+
+        # New fields carrying the domain-level rollup described above.
+        "domain_failure_totals":
+            domain_failure_totals,
+
+        "dominant_domain":
+            dominant_domain,
+
+        "dominant_domain_summary":
+            dominant_domain_summary,
+
+        # New fields carrying the sub-root-cause described above.
+        "sub_root_cause_code":
+            sub_root_cause_code,
+
+        "sub_root_cause_summary":
+            sub_root_cause_summary,
+
+        # New fields carrying the taxonomy-confirmed root cause described
+        # above — takes priority over ml_diagnosis.predicted_cause when
+        # present (see investigation_service.py's run_investigation).
+        "confirmed_root_cause":
+            confirmed_root_cause,
+
+        "confirmed_root_cause_summary":
+            confirmed_root_cause_summary,
     }
 
 
@@ -581,6 +859,10 @@ def analyze_response_codes(
 # Investigation Intelligence Agent
 # =========================================================
 
+# Sixth step: ask an LLM (see llm_service.py's plan_investigation) to
+# write a short plan/reasoning for ONLY the candidate cause(s) Node 4
+# selected — this keeps the LLM focused instead of reasoning about causes
+# that were already ruled out.
 def investigation_intelligence_agent(
     state: InvestigationState,
 ):
@@ -598,6 +880,7 @@ def investigation_intelligence_agent(
         [],
     )
 
+    # Shrink the full diagnosis map down to just the causes still in play.
     allowed_diagnosis_map = {
         path: diagnosis_map[path]
         for path in selected_paths
@@ -673,6 +956,11 @@ def investigation_intelligence_agent(
 # RAG Relevance Calculation
 # =========================================================
 
+# Helper (not a graph node itself, called by the RAG nodes below): scores
+# one retrieved knowledge-base passage against each candidate diagnosis
+# path, using the PATH_RELEVANCE_TERMS keyword weights defined near the
+# top of this file — higher score means the passage talks about things
+# relevant to that path.
 def calculate_path_relevance(
     content: str,
     selected_paths: List[str],
@@ -740,6 +1028,10 @@ def calculate_path_relevance(
 # RAG Filtering
 # =========================================================
 
+# Helper (also not a graph node): given every passage the RAG search
+# returned, keep only the ones actually relevant to a selected diagnosis
+# path (using calculate_path_relevance above) so irrelevant runbook text
+# doesn't get fed to the report-writing LLM.
 def filter_rag_evidence(
     rag_evidence: List[Dict[str, Any]],
     selected_paths: List[str],
@@ -767,6 +1059,9 @@ def filter_rag_evidence(
             "strongest_score"
         ]
 
+        # Only keep passages that scored at least 2 points of relevance
+        # — below that, a passage is more likely a coincidental keyword
+        # match than genuinely useful evidence.
         if path_score >= 2:
 
             scored_evidence.append(
@@ -783,9 +1078,13 @@ def filter_rag_evidence(
                 }
             )
 
+    # If nothing scored well enough to keep, fall back to just the first
+    # 4 raw results rather than returning nothing at all.
     if not scored_evidence:
         return rag_evidence[:4]
 
+    # Otherwise sort the kept passages best-first and only pass the top 4
+    # along, so the LLM prompt doesn't get flooded with weak evidence.
     scored_evidence.sort(
         key=lambda evidence: (
             evidence.get(
@@ -808,6 +1107,10 @@ def filter_rag_evidence(
 # Path-Aware RAG
 # =========================================================
 
+# Seventh step: search the knowledge base (runbooks + policies) for
+# passages relevant to whichever diagnosis path(s) are still in play,
+# rather than a plain keyword search on the raw question — this is what
+# "path-aware" means here.
 def retrieve_rag_evidence(
     state: InvestigationState,
 ):
@@ -831,6 +1134,9 @@ def retrieve_rag_evidence(
         get_diagnosis_map()
     )
 
+    # Build a short human-readable description of each candidate path
+    # (name, description, relevant domains/services) to steer the RAG
+    # search query below.
     path_descriptions = []
 
     for path in selected_paths:
@@ -856,6 +1162,9 @@ def retrieve_rag_evidence(
             )
         )
 
+    # If we have candidate paths, build a focused RAG query that names
+    # them explicitly; otherwise fall back to just searching the raw
+    # question text.
     if path_descriptions:
 
         focus_text = "\n\n".join(
@@ -880,6 +1189,9 @@ def retrieve_rag_evidence(
 
         rag_query = question
 
+    # Actually run the similarity search (rag_service.py) for the top 8
+    # candidate passages, then narrow those down to the best 4 using the
+    # path-relevance filter above.
     raw_rag_evidence = (
         retrieve_relevant_chunks(
             rag_query,
@@ -911,6 +1223,11 @@ def retrieve_rag_evidence(
 def generate_llm_summary(
     state: InvestigationState,
 ):
+    # dominant_domain_summary is the one deterministic, pre-computed
+    # sentence naming the biggest failure domain and its exact share
+    # (see analyze_response_codes above). Handing it straight to the
+    # report-writing LLM means it states the correct dominant domain
+    # instead of trying to add up scattered per-code numbers itself.
     llm_summary = (
         generate_investigation_summary(
             question=
@@ -945,6 +1262,28 @@ def generate_llm_summary(
                     "rag_evidence",
                     [],
                 ),
+
+            dominant_domain_summary=
+                state.get(
+                    "dominant_domain_summary",
+                ),
+
+            # Same deterministic-fact idea as dominant_domain_summary,
+            # but one level more specific (see analyze_response_codes'
+            # Step 3) — only set when a single exact reason code clearly
+            # dominates, so the report can confidently name it.
+            sub_root_cause_summary=
+                state.get(
+                    "sub_root_cause_summary",
+                ),
+
+            # The taxonomy's OWN definition of the root cause category
+            # (see analyze_response_codes' Step 4) — takes priority over
+            # the ML model's predicted_cause when present.
+            confirmed_root_cause_summary=
+                state.get(
+                    "confirmed_root_cause_summary",
+                ),
         )
     )
 
@@ -962,6 +1301,10 @@ def generate_llm_summary(
 def validate_investigation(
     state: InvestigationState,
 ):
+    # Same dominant_domain_summary fact is also handed to the critic, so
+    # it can directly compare "does the report's stated dominant cause
+    # match this pre-computed fact" instead of only checking looser
+    # things like "is this claim grounded in some evidence".
     validation_result = (
         validate_investigation_summary(
             question=
@@ -1002,6 +1345,21 @@ def validate_investigation(
                     "rag_evidence",
                     [],
                 ),
+
+            dominant_domain_summary=
+                state.get(
+                    "dominant_domain_summary",
+                ),
+
+            sub_root_cause_summary=
+                state.get(
+                    "sub_root_cause_summary",
+                ),
+
+            confirmed_root_cause_summary=
+                state.get(
+                    "confirmed_root_cause_summary",
+                ),
         )
     )
 
@@ -1015,6 +1373,11 @@ def validate_investigation(
 # Validation Routing
 # =========================================================
 
+# Looks at the critic LLM's verdict text from Node 9 and decides which
+# node runs next: if it starts with "VALIDATION STATUS: PASS", the report
+# is trustworthy enough to go to recommendation_agent; anything else
+# (FAIL, missing, malformed) routes to the validation_failed fallback
+# below instead of showing a possibly-wrong report to the user.
 def route_after_validation(
     state: InvestigationState,
 ):
@@ -1041,6 +1404,9 @@ def route_after_validation(
 # Validation Failure Fallback
 # =========================================================
 
+# Dead-end node reached only when the critic rejected the report — instead
+# of returning the untrusted LLM summary, this replaces it with a fixed
+# "escalate to a human" message so a bad report never reaches the user.
 def validation_failed(
     state: InvestigationState,
 ):
@@ -1066,6 +1432,10 @@ def validation_failed(
 # Recommendation Agent
 # =========================================================
 
+# Final success-path step: ask an LLM (generate_recommendations) for
+# concrete next actions, then append a fixed "Investigation Scope" /
+# "Guardrail Status: PASS" footer so every successful report ends with
+# the same machine-readable summary block.
 def recommendation_agent(
     state: InvestigationState,
 ):
@@ -1115,6 +1485,11 @@ def recommendation_agent(
 
             investigation_plan=
                 investigation_plan,
+
+            confirmed_root_cause_summary=
+                state.get(
+                    "confirmed_root_cause_summary",
+                ),
         )
     )
 
@@ -1132,6 +1507,9 @@ def recommendation_agent(
         f"Guardrail Status: PASS"
     )
 
+    # Even on the success path, still flag "ambiguous" cases for a human
+    # to double-check — a clean guardrail pass doesn't mean the ML model
+    # was actually confident about a single cause.
     human_escalation_required = (
         assessment == "ambiguous"
     )
@@ -1149,6 +1527,9 @@ def recommendation_agent(
 # Insufficient Evidence Fallback
 # =========================================================
 
+# Dead-end node reached when RAG search (Node 7) found nothing usable —
+# returns a fixed "not enough evidence, escalate to a human" bundle
+# instead of ever calling the report-writing LLM on thin evidence.
 def insufficient_evidence(
     state: InvestigationState,
 ):
@@ -1185,6 +1566,10 @@ def insufficient_evidence(
 # RAG Routing
 # =========================================================
 
+# Decides which node runs after RAG retrieval (Node 7): if nothing came
+# back, or the single best match is too weak a score (<0.35 similarity),
+# go straight to the insufficient_evidence fallback instead of letting the
+# report-writing LLM hallucinate off thin evidence.
 def route_after_rag(
     state: InvestigationState,
 ):
@@ -1215,11 +1600,17 @@ def route_after_rag(
 # Build Graph
 # =========================================================
 
+# Create the empty LangGraph "flowchart" object, typed to the
+# InvestigationState shape defined near the top of this file — every node
+# below both reads from and writes into that shared state.
 graph_builder = StateGraph(
     InvestigationState
 )
 
 
+# Register every node function above under a short name — this is just
+# giving each step of the flowchart a label; it doesn't wire up the
+# actual order yet (that's the add_edge calls further down).
 graph_builder.add_node(
     "transaction_analysis",
     analyze_transactions,
@@ -1285,6 +1676,14 @@ graph_builder.add_node(
 # Workflow
 # =========================================================
 
+# THIS is the real, authoritative execution order of the whole pipeline:
+# START -> transaction_analysis -> feature_extraction -> ml_diagnosis ->
+# diagnosis_assessment -> response_code_analysis ->
+# investigation_intelligence -> rag_retrieval -> (branch: llm_reasoning OR
+# insufficient_evidence/END) -> validation -> (branch: recommendation/END
+# OR validation_failed/END). A plain add_edge is an unconditional "always
+# go here next"; add_conditional_edges below picks the next node at
+# runtime based on a routing function's return value.
 graph_builder.add_edge(
     START,
     "transaction_analysis",
@@ -1321,6 +1720,10 @@ graph_builder.add_edge(
 )
 
 
+# Branch point 1: after RAG retrieval, route_after_rag decides whether
+# there's enough evidence to continue to llm_reasoning, or whether the
+# pipeline should short-circuit straight to the insufficient_evidence
+# dead end (which itself leads to END below).
 graph_builder.add_conditional_edges(
     "rag_retrieval",
     route_after_rag,
@@ -1340,6 +1743,9 @@ graph_builder.add_edge(
 )
 
 
+# Branch point 2: after the critic LLM runs, route_after_validation
+# decides whether the report passed (go to recommendation) or failed (go
+# to the validation_failed dead end instead).
 graph_builder.add_conditional_edges(
     "validation",
     route_after_validation,
@@ -1353,6 +1759,8 @@ graph_builder.add_conditional_edges(
 )
 
 
+# All three possible endings (successful recommendation, validation
+# failure, or insufficient evidence) terminate the graph the same way.
 graph_builder.add_edge(
     "recommendation",
     END,
@@ -1373,6 +1781,9 @@ graph_builder.add_edge(
 # Compile
 # =========================================================
 
+# Freeze the flowchart above into a runnable object — this is the single
+# object api.py actually calls (as investigation_graph.invoke(...)) to run
+# a real investigation end to end.
 investigation_graph = (
     graph_builder.compile()
 )
