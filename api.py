@@ -22,6 +22,7 @@ from rag.retriever import refresh_index
 from supabase_store import (
     add_ml_training_example,
     create_knowledge_document,
+    delete_knowledge_document,
     list_knowledge_documents,
     list_transactions,
     submit_investigation_feedback,
@@ -668,3 +669,26 @@ def create_knowledge_base_document(
     refresh_index()
 
     return record
+
+
+# Permanently removes one knowledge-base document by its slug — this is
+# what the Knowledge Base page's delete button calls. Rebuilds the RAG
+# search index afterward too, the same way creating a document does, so
+# the deleted content stops showing up in investigations right away
+# instead of only after a server restart.
+@app.delete("/api/knowledge-base/{slug}")
+def delete_knowledge_base_document(
+    slug: str,
+) -> Dict[str, Any]:
+
+    deleted_record = delete_knowledge_document(slug)
+
+    if deleted_record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No knowledge document found with slug '{slug}'.",
+        )
+
+    refresh_index()
+
+    return deleted_record

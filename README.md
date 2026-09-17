@@ -59,8 +59,11 @@ Synthetic transactions, runbook documents, and ML training examples are stored i
 - `GET /health`
 - `POST /api/investigate`
 - `GET /api/investigations?limit=20`
+- `POST /api/investigations/{investigation_id}/feedback`
 - `GET /api/transactions?limit=100`
 - `GET /api/knowledge-base`
+- `POST /api/knowledge-base`
+- `DELETE /api/knowledge-base/{slug}`
 
 ## Evaluation and regression checks
 
@@ -74,6 +77,22 @@ Both scripts are self-contained: they load `synthetic_ml_dataset.json` (400 labe
 Current held-out evaluation: 93.75% overall accuracy on 80 test incidents. With the configured 0.70 minimum top probability and 0.30 minimum probability gap, coverage is 92.5% and accepted-case accuracy is 94.59%.
 
 `synthetic_ml_dataset.json` is also the source for the live model: it replaces an earlier 8-example placeholder set that only existed to keep the Random Forest bootable, seeded into Supabase's `ml_training_examples` table so the deployed model actually trains on the same 400 examples these scripts evaluate against, not a token bootstrap set.
+
+## Planned next session: RAG vector-store migration
+
+Not implemented yet. This section is a self-contained brief for picking this up in a fresh chat — the business reasoning and the technical decisions already made, so they don't need to be re-argued from scratch.
+
+**Business requirement.** The knowledge base already contains a `scheduled-network-maintenance-windows` document listing each card network's scheduled downtime windows (e.g. "Downtime for RuPay in India is 1:50 AM to 2:05 AM daily..."). Today, this document is just one passage among many that *might* surface during a root-cause investigation — nothing checks whether a specific incident's failures actually line up with a specific network's specific maintenance window. The goal is to make that check real: given a batch of failures dominated by one network, look up that network's documented maintenance window and report whether the failures actually occurred during it, as a confirmed contributing factor. Separately, the person building this wants the underlying retrieval mechanism to look like a real production RAG setup (embeddings stored in an actual vector store, not recomputed in memory on every request) for their own hands-on experience, not because the current approach is incorrect at this scale.
+
+**Decided technical direction — read before proposing alternatives:**
+
+- **Vector store: PostgreSQL + the `pgvector` extension, inside the existing Supabase project.** This was chosen over FAISS (a library, not a service — no hosted option), Pinecone/Weaviate Cloud/Chroma Cloud (all rejected because the requirement was explicitly "nothing local, but also no new account/API key needed" — Supabase is already the project's database, so turning on one extension there satisfies "real vector database" without new infrastructure). Do not re-propose FAISS or a hosted vector-DB service unless the user raises it again themselves.
+- **Never modify, merge, or delete any existing `knowledge_documents` row's content as part of this work.** A duplicate/conflicting maintenance-windows document existed earlier and has already been resolved (deleted, via the Knowledge Base page's delete button) by the user directly — there is nothing left to reconcile. Any new work should add a new, separate table for chunks/embeddings derived from existing document content, never rewrite the source documents themselves.
+- **The maintenance-window check must be deterministic, not left to LLM judgement.** Vector similarity search's job is only to find the right passage (i.e. which document talks about this network). Once found, a small parsing step should turn that passage into structured data (network, country, time window, day-of-week rules) and check the incident's exact timestamp against it in plain code — the same reliability standard already used for `sub_root_cause`/`confirmed_root_cause` in `agent_graph.py` (see "Decision policy" above for that precedent). Do not simply hand the retrieved passage to the LLM and ask it to judge whether the times overlap.
+- **No new API keys or credentials are needed.** `pgvector` is a Postgres extension enabled via SQL, not a separate hosted service — it uses the same `SUPABASE_SERVICE_ROLE_KEY` already configured. The embedding model stays `sentence-transformers` (`all-MiniLM-L6-v2`), run locally, no key required.
+- Current retrieval mechanism, for context: `rag/retriever.py` embeds every knowledge-document chunk in memory at process start (and again whenever a document is created/deleted, via `refresh_index()`), and answers a query with a brute-force cosine-similarity scan (`sentence_transformers.util.cos_sim`) — no persisted index today. This is what pgvector replaces.
+
+**Rough shape of the work** (not yet scoped file-by-file): a new migration enabling `pgvector` and adding a chunks/embeddings table; a small module that embeds+stores chunks there and answers similarity queries from it (same input/output shape as `rag/retriever.py` today, so nothing else has to change); a parsing module for the maintenance-windows document's text; and one new deterministic step in `agent_graph.py` that ties a batch's dominant network to a maintenance-window check, threaded through `llm_service.py`'s prompts the same way `confirmed_root_cause_summary` already is.
 
 ## Data boundary and limitations
 

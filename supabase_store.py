@@ -212,6 +212,21 @@ def create_knowledge_document(record: Dict[str, Any]) -> Dict[str, Any]:
     return response.data[0]
 
 
+# Permanently removes one knowledge document by its slug — this is what
+# the Knowledge Base page's delete button calls. Returns the deleted
+# row (so the caller can confirm what was actually removed), or None if
+# no document with that slug existed.
+def delete_knowledge_document(slug: str) -> Dict[str, Any] | None:
+    response = (
+        get_supabase()
+        .table("knowledge_documents")
+        .delete()
+        .eq("slug", slug)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
 # Fetches every labelled example the ML model can learn from — this is
 # the full "textbook" ml_diagnosis.py's retrain_model() reads before
 # fitting the Random Forest.
