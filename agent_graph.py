@@ -7,9 +7,12 @@ from typing import TypedDict, List, Dict, Any, Optional
 
 from langgraph.graph import StateGraph, START, END
 
+from datetime import datetime
+
 from diagnosis_map import get_diagnosis_map
 from failure_taxonomy import failure_reason_code, failure_reason_details
 from feature_extractor import extract_diagnostic_features
+from maintenance_windows import check_window, parse_network_window
 from ml_diagnosis import diagnose
 from rag.retriever import retrieve_relevant_chunks
 from supabase_store import list_transactions
@@ -74,6 +77,17 @@ class InvestigationState(TypedDict, total=False):
     # ml_diagnosis.predicted_cause when both are present.
     confirmed_root_cause: Optional[str]
     confirmed_root_cause_summary: Optional[str]
+
+    # Network maintenance-window check (see check_network_maintenance_window
+    # below): whichever card network accounts for a clear majority of
+    # failures, and — when RAG similarity search finds that network's
+    # documented downtime passage — whether the batch's failure timestamps
+    # actually fall inside it. Like confirmed_root_cause above, this is a
+    # deterministic, plain-code check, not an LLM judgement call.
+    dominant_network: Optional[str]
+    dominant_network_share: float
+    maintenance_window_check: Dict[str, Any]
+    maintenance_window_summary: Optional[str]
 
     diagnosis_assessment: Dict[str, Any]
     investigation_plan: Dict[str, Any]
@@ -854,6 +868,187 @@ def analyze_response_codes(
     }
 
 
+# Same >=50% share bar used everywhere else in this file (sub_root_cause,
+# confirmed_root_cause) for calling something "clearly dominant" rather
+# than just "the biggest of several similar numbers".
+MINIMUM_DOMINANT_NETWORK_SHARE = 0.5
+
+
+# =========================================================
+# Node 5b
+# Network Maintenance-Window Check
+# =========================================================
+
+# Ties a batch's dominant card network to its documented scheduled
+# downtime, deterministically. Two separate jobs, kept separate:
+#
+#   1. RAG (retrieve_relevant_chunks, now backed by the pgvector
+#      knowledge_chunks table — see rag/retriever.py) finds WHICH
+#      passage, if any, talks about this network's maintenance window,
+#      the same way every other RAG lookup in this file finds relevant
+#      knowledge — by embedding similarity, not a hardcoded document
+#      lookup.
+#   2. maintenance_windows.py turns that passage into structured data and
+#      checks the batch's exact failure timestamps against it in plain
+#      code — the same reliability standard as confirmed_root_cause
+#      above. The LLM is never asked to judge whether a timestamp falls
+#      inside a window.
+def check_network_maintenance_window(
+    state: InvestigationState,
+):
+    failed_transactions = state.get(
+        "failed_transactions",
+        [],
+    )
+
+    network_failure_counts: Dict[str, int] = {}
+
+    for txn in failed_transactions:
+
+        network = txn.get("network")
+
+        if not network:
+            continue
+
+        network_failure_counts[network] = (
+            network_failure_counts.get(
+                network,
+                0,
+            )
+            + 1
+        )
+
+    dominant_network = None
+    dominant_network_share = 0.0
+
+    if network_failure_counts:
+
+        dominant_network = max(
+            network_failure_counts,
+            key=network_failure_counts.get,
+        )
+
+        dominant_network_share = (
+            network_failure_counts[dominant_network]
+            / len(failed_transactions)
+        )
+
+    maintenance_window_check: Dict[str, Any] = {}
+    maintenance_window_summary = None
+
+    # Only bother looking up a maintenance window when one network
+    # clearly dominates the batch — with failures spread across several
+    # networks, "the batch is dominated by network X" wouldn't even be a
+    # true premise to check a window against.
+    if (
+        dominant_network
+        and dominant_network_share >= MINIMUM_DOMINANT_NETWORK_SHARE
+    ):
+
+        rag_hits = retrieve_relevant_chunks(
+            f"{dominant_network} scheduled maintenance downtime window",
+            top_k=1,
+        )
+
+        passage_text = (
+            rag_hits[0]["content"]
+            if rag_hits
+            else ""
+        )
+
+        parsed_window = parse_network_window(passage_text)
+
+        # Sanity check: the retrieved passage must actually be ABOUT the
+        # dominant network. Similarity search can occasionally surface
+        # the closest match even when nothing truly relevant exists —
+        # this guards against silently checking timestamps against the
+        # wrong network's window.
+        if (
+            parsed_window
+            and parsed_window["network"].lower()
+            == dominant_network.lower()
+        ):
+
+            in_window_count = 0
+            network_failures = 0
+
+            for txn in failed_transactions:
+
+                if txn.get("network") != dominant_network:
+                    continue
+
+                network_failures += 1
+
+                raw_created_at = txn.get("created_at")
+
+                if not raw_created_at:
+                    continue
+
+                created_at = datetime.fromisoformat(
+                    str(raw_created_at).replace("Z", "+00:00")
+                )
+
+                if check_window(parsed_window, created_at)["in_window"]:
+                    in_window_count += 1
+
+            in_window_share = (
+                in_window_count / network_failures
+                if network_failures
+                else 0
+            )
+
+            maintenance_window_check = {
+                "network": dominant_network,
+                "country": parsed_window["country"],
+                "network_failure_count": network_failures,
+                "in_window_count": in_window_count,
+                "in_window_share": round(in_window_share, 3),
+                "source_passage": passage_text,
+            }
+
+            if in_window_share >= MINIMUM_DOMINANT_NETWORK_SHARE:
+
+                maintenance_window_summary = (
+                    f"{dominant_network} accounts for "
+                    f"{dominant_network_share * 100:.1f}% of failed "
+                    f"transactions in this batch, and {in_window_count} "
+                    f"of those {network_failures} {dominant_network} "
+                    f"failures ({in_window_share * 100:.1f}%) occurred "
+                    f"during {dominant_network}'s documented scheduled "
+                    f"maintenance window for {parsed_window['country']} "
+                    "(see retrieved runbook knowledge) — confirmed as a "
+                    "contributing factor, not a coincidence."
+                )
+
+            else:
+
+                maintenance_window_summary = (
+                    f"{dominant_network} accounts for "
+                    f"{dominant_network_share * 100:.1f}% of failed "
+                    f"transactions in this batch, but only "
+                    f"{in_window_count} of {network_failures} "
+                    f"{dominant_network} failures "
+                    f"({in_window_share * 100:.1f}%) occurred during "
+                    f"{dominant_network}'s documented scheduled "
+                    "maintenance window — the failures are not "
+                    "explained by scheduled maintenance."
+                )
+
+    return {
+        "dominant_network":
+            dominant_network,
+
+        "dominant_network_share":
+            round(dominant_network_share, 3),
+
+        "maintenance_window_check":
+            maintenance_window_check,
+
+        "maintenance_window_summary":
+            maintenance_window_summary,
+    }
+
+
 # =========================================================
 # Node 6
 # Investigation Intelligence Agent
@@ -1284,6 +1479,14 @@ def generate_llm_summary(
                 state.get(
                     "confirmed_root_cause_summary",
                 ),
+
+            # Deterministic network-downtime-overlap fact (see
+            # check_network_maintenance_window above) — same "pre-computed,
+            # do not re-derive" treatment as confirmed_root_cause_summary.
+            maintenance_window_summary=
+                state.get(
+                    "maintenance_window_summary",
+                ),
         )
     )
 
@@ -1359,6 +1562,11 @@ def validate_investigation(
             confirmed_root_cause_summary=
                 state.get(
                     "confirmed_root_cause_summary",
+                ),
+
+            maintenance_window_summary=
+                state.get(
+                    "maintenance_window_summary",
                 ),
         )
     )
@@ -1489,6 +1697,11 @@ def recommendation_agent(
             confirmed_root_cause_summary=
                 state.get(
                     "confirmed_root_cause_summary",
+                ),
+
+            maintenance_window_summary=
+                state.get(
+                    "maintenance_window_summary",
                 ),
         )
     )
@@ -1637,6 +1850,11 @@ graph_builder.add_node(
 )
 
 graph_builder.add_node(
+    "maintenance_window_check",
+    check_network_maintenance_window,
+)
+
+graph_builder.add_node(
     "investigation_intelligence",
     investigation_intelligence_agent,
 )
@@ -1678,8 +1896,8 @@ graph_builder.add_node(
 
 # THIS is the real, authoritative execution order of the whole pipeline:
 # START -> transaction_analysis -> feature_extraction -> ml_diagnosis ->
-# diagnosis_assessment -> response_code_analysis ->
-# investigation_intelligence -> rag_retrieval -> (branch: llm_reasoning OR
+# diagnosis_assessment -> response_code_analysis -> maintenance_window_check
+# -> investigation_intelligence -> rag_retrieval -> (branch: llm_reasoning OR
 # insufficient_evidence/END) -> validation -> (branch: recommendation/END
 # OR validation_failed/END). A plain add_edge is an unconditional "always
 # go here next"; add_conditional_edges below picks the next node at
@@ -1711,6 +1929,11 @@ graph_builder.add_edge(
 
 graph_builder.add_edge(
     "response_code_analysis",
+    "maintenance_window_check",
+)
+
+graph_builder.add_edge(
+    "maintenance_window_check",
     "investigation_intelligence",
 )
 

@@ -64,6 +64,15 @@ def generate_investigation_summary(
     # answer, even if ml_diagnosis's probabilities point somewhere else.
     # Optional/None when no domain is dominant enough to confirm.
     confirmed_root_cause_summary: str | None = None,
+    # Whether the batch's dominant card network's documented scheduled
+    # maintenance window (found via RAG similarity search, then checked
+    # against the batch's exact failure timestamps in plain code — see
+    # check_network_maintenance_window in agent_graph.py) actually
+    # overlaps the observed failures. Pre-computed, deterministic — not
+    # something to re-derive from the raw retrieved passage below.
+    # Optional/None when no network clearly dominates the batch, or no
+    # matching maintenance-window passage was found.
+    maintenance_window_summary: str | None = None,
 ):
     assessment = investigation_plan.get(
         "assessment",
@@ -106,6 +115,11 @@ cause, even if ML DIAGNOSTIC SIGNAL assigns a higher probability to a
 different category. The taxonomy's own definition is not something an
 ML probability can outvote):
 {confirmed_root_cause_summary or "Not available — no domain was dominant enough to confirm a category via the taxonomy; rely on the ML diagnostic signal below instead."}
+
+NETWORK MAINTENANCE-WINDOW CHECK (pre-computed, deterministic — RAG
+found the relevant passage, and plain code checked the batch's exact
+failure timestamps against it; do not recompute or contradict this):
+{maintenance_window_summary or "Not available — no single network accounts for a clear majority of failures, or no documented maintenance-window passage was found for it."}
 
 ML DIAGNOSTIC SIGNAL:
 {ml_diagnosis}
@@ -375,6 +389,10 @@ def validate_investigation_summary(
     # enough) instead of letting a wrong or missing category claim slip
     # through.
     confirmed_root_cause_summary: str | None = None,
+    # Same deterministic network-maintenance-window fact given to the
+    # report-writer above — lets the critic check the report correctly
+    # states (or correctly omits) it.
+    maintenance_window_summary: str | None = None,
 ):
     assessment = investigation_plan.get(
         "assessment",
@@ -418,6 +436,11 @@ NOT a statistical guess. When present, the report SHOULD have reported
 this category as confirmed, overriding the ML signal, even if ML
 DIAGNOSTIC SIGNAL below assigns a higher probability elsewhere):
 {confirmed_root_cause_summary or "Not available — no domain was dominant enough to confirm a category via the taxonomy."}
+
+NETWORK MAINTENANCE-WINDOW CHECK (pre-computed, deterministic — use this
+to check the report's own maintenance-window claim, do not recompute it
+yourself):
+{maintenance_window_summary or "Not available — no single network accounts for a clear majority of failures, or no documented maintenance-window passage was found for it."}
 
 ML DIAGNOSTIC SIGNAL:
 {ml_diagnosis}
@@ -589,6 +612,11 @@ def generate_recommendations(
     # guidance instead of generically saying "investigate every
     # selected path" when the taxonomy has already settled the question.
     confirmed_root_cause_summary: str | None = None,
+    # Same deterministic network-maintenance-window fact used above — so
+    # a confirmed overlap can be recommended against directly (e.g.
+    # "confirm with the network" rather than a generic investigation
+    # step) instead of being ignored.
+    maintenance_window_summary: str | None = None,
 ):
     # Pull the two facts this prompt actually needs out of the larger
     # investigation_plan dictionary.
@@ -623,6 +651,9 @@ present, this category is already settled; focus recommendations on
 it directly instead of treating every selected path as still needing
 investigation):
 {confirmed_root_cause_summary or "Not available — no domain was dominant enough to confirm a category via the taxonomy."}
+
+NETWORK MAINTENANCE-WINDOW CHECK (pre-computed, deterministic):
+{maintenance_window_summary or "Not available — no single network accounts for a clear majority of failures, or no documented maintenance-window passage was found for it."}
 
 FAILURE-REASON ANALYSIS:
 {response_code_analysis}

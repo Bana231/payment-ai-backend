@@ -297,6 +297,15 @@ def build_transaction_lookup_response(
                 "category": None,
                 "summary": None,
             },
+            # A single-transaction lookup has no batch to check a
+            # dominant-network maintenance window against — kept only so
+            # the response shape matches every other root-cause response.
+            "maintenance_window": {
+                "network": None,
+                "network_share": 0,
+                "check": {},
+                "summary": None,
+            },
             "evidence": [],
             "investigation_report": (
                 f"Transaction {transaction_id} failed with reason code "
@@ -436,6 +445,14 @@ def build_transaction_lookup_response(
                 "in the failure taxonomy (diagnosis_map.py) — confirmed, "
                 "since this is a single-transaction lookup."
             ),
+        },
+        # Same reasoning as above: no batch to check a dominant-network
+        # maintenance window against for a single transaction.
+        "maintenance_window": {
+            "network": None,
+            "network_share": 0,
+            "check": {},
+            "summary": None,
         },
         "evidence": [],
         "investigation_report": llm_summary,
@@ -2824,6 +2841,41 @@ def run_investigation(
             "summary":
                 result.get(
                     "confirmed_root_cause_summary",
+                ),
+        },
+
+        # ---------------------------------------------
+        # Network Maintenance-Window Check
+        #
+        # Whichever card network accounts for a clear majority of
+        # failures in this batch, and whether its documented scheduled
+        # downtime (found via RAG similarity search, then checked in
+        # plain code — see check_network_maintenance_window in
+        # agent_graph.py) actually overlaps the failure timestamps.
+        # `network` is None when no network was that dominant, in which
+        # case there was nothing to check a window against.
+        # ---------------------------------------------
+
+        "maintenance_window": {
+            "network":
+                result.get(
+                    "dominant_network",
+                ),
+
+            "network_share":
+                result.get(
+                    "dominant_network_share",
+                ),
+
+            "check":
+                result.get(
+                    "maintenance_window_check",
+                    {},
+                ),
+
+            "summary":
+                result.get(
+                    "maintenance_window_summary",
                 ),
         },
 
