@@ -297,6 +297,11 @@ def build_transaction_lookup_response(
                 "category": None,
                 "summary": None,
             },
+            # Same reasoning as sub_root_cause above.
+            "most_likely_reason": {
+                "code": None,
+                "summary": None,
+            },
             # A single-transaction lookup has no batch to check a
             # dominant-network maintenance window against — kept only so
             # the response shape matches every other root-cause response.
@@ -445,6 +450,11 @@ def build_transaction_lookup_response(
                 "in the failure taxonomy (diagnosis_map.py) — confirmed, "
                 "since this is a single-transaction lookup."
             ),
+        },
+        # Same reasoning as above.
+        "most_likely_reason": {
+            "code": None,
+            "summary": None,
         },
         # Same reasoning as above: no batch to check a dominant-network
         # maintenance window against for a single transaction.
@@ -1999,6 +2009,43 @@ def build_factual_answer(
 
 
 # =========================================================
+# Human Review — Evidence Support Check
+# =========================================================
+
+# Evidence-strength grades (see agent_graph.py's grade_evidence_strength)
+# treated as strong enough for a human's chosen cause to lock a review
+# immediately, without needing admin sign-off.
+EVIDENCE_SUPPORTED_GRADES = {"strong", "moderate"}
+
+
+# Whether `cause`'s evidence, per this investigation's persisted grading,
+# clears the bar to lock a review immediately. A cause missing from
+# evidence_map entirely is treated as unsupported, not silently accepted
+# — the map only contains the ML model's actual candidate causes, so
+# anything else names something the evidence never even considered.
+def is_cause_evidence_supported(
+    evidence_map: Dict[str, Any],
+    cause: Optional[str],
+) -> bool:
+
+    if not cause:
+        return False
+
+    grade = (
+        evidence_map
+        .get(
+            cause,
+            {},
+        )
+        .get(
+            "evidence_strength"
+        )
+    )
+
+    return grade in EVIDENCE_SUPPORTED_GRADES
+
+
+# =========================================================
 # History Helpers
 # =========================================================
 
@@ -2129,6 +2176,18 @@ def add_history_record(
         "diagnostic_features":
             diagnostic_features
             or {},
+
+        # Per-cause evidence-strength grading (see agent_graph.py's
+        # grade_evidence_strength), persisted so a human review submitted
+        # later can be checked against it — previously this only existed
+        # in the live response right after the investigation ran.
+        "evidence_map":
+            result[
+                "diagnosis_assessment"
+            ].get(
+                "evidence_map",
+                {},
+            ),
     }
 
     return save_investigation(record)
@@ -2816,6 +2875,25 @@ def run_investigation(
             "summary":
                 result.get(
                     "sub_root_cause_summary",
+                ),
+        },
+
+        # ---------------------------------------------
+        # Most-Likely Reason (fallback when sub_root_cause above isn't
+        # confirmed) — the single top exact reason code even below the
+        # 50% majority bar, honestly labeled as a lead rather than a
+        # confirmed fact. Always None when sub_root_cause is set.
+        # ---------------------------------------------
+
+        "most_likely_reason": {
+            "code":
+                result.get(
+                    "most_likely_reason_code",
+                ),
+
+            "summary":
+                result.get(
+                    "most_likely_reason_summary",
                 ),
         },
 

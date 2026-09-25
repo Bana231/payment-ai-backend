@@ -68,6 +68,14 @@ class InvestigationState(TypedDict, total=False):
     sub_root_cause_code: Optional[str]
     sub_root_cause_summary: Optional[str]
 
+    # Most-likely reason (see analyze_response_codes' Step 3b): a
+    # fallback for when sub_root_cause above isn't confirmed — the single
+    # top exact reason code even below the 50% bar, honestly labeled as
+    # a lead rather than a confirmed fact. Always None when sub_root_cause
+    # is set, or when there's a genuine tie for the top code.
+    most_likely_reason_code: Optional[str]
+    most_likely_reason_summary: Optional[str]
+
     # Confirmed root cause (see analyze_response_codes' Step 4): the
     # taxonomy's OWN definition of which category the dominant domain
     # belongs to (e.g. "F08" -> "payment_service_issue" per
@@ -781,6 +789,46 @@ def analyze_response_codes(
             )
 
     # ---------------------------------------------------------------
+    # STEP 3b: Most-likely reason — a fallback for when sub_root_cause
+    # above stayed None because no single code hit the 50% majority bar.
+    # Reviewers still benefit from seeing SOMETHING rather than an empty
+    # panel, as long as it's honestly labeled as a lead, not a confirmed
+    # fact. Only set when there's a single clear top code (no tie) — a
+    # genuine tie has no "most likely" answer to report.
+    # ---------------------------------------------------------------
+    most_likely_reason_code = None
+    most_likely_reason_summary = None
+
+    if (
+        sub_root_cause_code is None
+        and len(dominant_failure_codes) == 1
+        and response_code_counts
+    ):
+
+        candidate_code = dominant_failure_codes[0]
+        total_reason_failures = sum(
+            response_code_counts.values()
+        )
+        candidate_share = (
+            response_code_counts[candidate_code] /
+            total_reason_failures
+            if total_reason_failures
+            else 0
+        )
+
+        candidate_info = failure_reason_details(candidate_code)
+
+        most_likely_reason_code = candidate_code
+        most_likely_reason_summary = (
+            f"The most common single failure reason is "
+            f"{candidate_code} ({candidate_info['display_name']}), "
+            f"accounting for {response_code_counts[candidate_code]} of "
+            f"{total_reason_failures} failed transactions "
+            f"({candidate_share * 100:.1f}%) — not a majority, so this "
+            "is a lead worth investigating, not a confirmed cause."
+        )
+
+    # ---------------------------------------------------------------
     # STEP 4: Confirmed root cause, PER YOUR TAXONOMY — not per the ML
     # model's independent guess. The ML classifier (Node 3/4 above) can
     # disagree with what the taxonomy itself says a domain means (e.g. it
@@ -856,6 +904,15 @@ def analyze_response_codes(
 
         "sub_root_cause_summary":
             sub_root_cause_summary,
+
+        # New fields carrying the most-likely-reason fallback described
+        # above — only ever set when sub_root_cause above is None, so a
+        # reviewer always has something to look at.
+        "most_likely_reason_code":
+            most_likely_reason_code,
+
+        "most_likely_reason_summary":
+            most_likely_reason_summary,
 
         # New fields carrying the taxonomy-confirmed root cause described
         # above — takes priority over ml_diagnosis.predicted_cause when

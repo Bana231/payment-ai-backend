@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from investigation_service import (
     get_investigation_history,
+    is_cause_evidence_supported,
     run_investigation,
 )
 from ml_diagnosis import retrain_model
@@ -23,7 +24,9 @@ from supabase_store import (
     add_ml_training_example,
     create_knowledge_document,
     delete_knowledge_document,
+    get_investigation,
     list_knowledge_documents,
+    list_pending_investigations,
     list_transactions,
     submit_investigation_feedback,
 )
@@ -150,6 +153,37 @@ class InvestigationFeedbackInput(BaseModel):
     )
     notes: Optional[str] = None
     reviewer: Optional[str] = None
+    role: str = Field(
+        default="user",
+        description=(
+            "Which profile is submitting this review: 'user' or 'admin'. "
+            "No password behind this — it's a workflow gate, not real "
+            "authentication. Admin can lock a review even when the "
+            "evidence doesn't clearly support the chosen cause; a user "
+            "submission that doesn't clear the evidence bar goes to "
+            "pending_admin_approval instead of locking immediately."
+        ),
+    )
+
+
+# The body of an admin's decision on a pending (not-yet-locked) review —
+# approve the user's original proposal as-is, override it with a
+# different cause, or reject it and send the investigation back to
+# needing review.
+class AdminResolutionInput(BaseModel):
+    admin_action: str = Field(
+        ...,
+        description="One of: approve, override, reject.",
+    )
+    cause: Optional[str] = Field(
+        default=None,
+        description="Required when admin_action is 'override'.",
+    )
+    notes: Optional[str] = None
+    reviewer: str = Field(
+        ...,
+        description="The admin's name, for the audit trail.",
+    )
 
 
 # The body of a "create/update a knowledge base document" request — used
@@ -263,11 +297,38 @@ def investigation_history(
     }
 
 
+# Every investigation currently awaiting an admin decision — powers the
+# Approvals page's queue. Oldest first, so an admin works through it in
+# arrival order.
+@app.get("/api/investigations/pending")
+def pending_investigations() -> Dict[str, Any]:
+
+    investigations = (
+        list_pending_investigations()
+    )
+
+    return {
+        "count": len(
+            investigations
+        ),
+        "investigations":
+            investigations,
+    }
+
+
 # Lets a human reviewer confirm, override, or reject a specific
-# investigation's diagnosis. When they confirm or override with a real
-# cause, this also feeds that labelled example back into the ML training
-# set and retrains the model immediately, so the model can actually learn
-# from human review instead of the feedback being purely cosmetic.
+# investigation's diagnosis. Three rules on top of the plain save:
+#   1. One review per investigation — a second submission on an already
+#      reviewed (locked or pending) investigation is rejected, not
+#      silently overwritten.
+#   2. A 'rejected' decision (no cause chosen) always locks immediately —
+#      there's nothing evidence-checkable about "no valid cause".
+#   3. A 'confirmed'/'overridden' decision only locks immediately when
+#      the reviewer is Admin, or the chosen cause is graded strong/
+#      moderate in this investigation's persisted evidence_map. A User
+#      picking a cause the evidence doesn't support gets saved as
+#      pending_admin_approval instead — not trained on until an admin
+#      resolves it via the /feedback/resolve route below.
 @app.post("/api/investigations/{investigation_id}/feedback")
 def submit_investigation_feedback_route(
     investigation_id: str,
@@ -287,17 +348,78 @@ def submit_investigation_feedback_route(
             detail="cause is required when decision is confirmed or overridden.",
         )
 
-    # Actually save the reviewer's decision onto that investigation's row.
-    updated = submit_investigation_feedback(
-        investigation_id,
-        {
-            "human_feedback_decision": feedback.decision,
-            "human_feedback_cause": feedback.cause,
-            "human_feedback_notes": feedback.notes,
-            "human_feedback_reviewer": feedback.reviewer,
-            "human_feedback_at": datetime.now(timezone.utc).isoformat(),
-        },
+    if feedback.role not in {"user", "admin"}:
+        raise HTTPException(
+            status_code=422,
+            detail="role must be one of: user, admin.",
+        )
+
+    existing = get_investigation(investigation_id)
+
+    if existing is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No investigation found with id {investigation_id}.",
+        )
+
+    if existing.get("review_status") is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This investigation has already been reviewed "
+                f"(status: {existing['review_status']}) — a second "
+                "submission is not allowed. See /feedback/resolve if "
+                "it's still pending admin approval."
+            ),
+        )
+
+    locks_immediately = (
+        feedback.decision == "rejected"
+        or feedback.role == "admin"
+        or is_cause_evidence_supported(
+            existing.get("evidence_map", {}),
+            feedback.cause,
+        )
     )
+
+    base_update = {
+        "human_feedback_decision": feedback.decision,
+        "human_feedback_cause": feedback.cause,
+        "human_feedback_notes": feedback.notes,
+        "human_feedback_reviewer": feedback.reviewer,
+        "human_feedback_role": feedback.role,
+        "human_feedback_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    if locks_immediately:
+        updated = submit_investigation_feedback(
+            investigation_id,
+            {
+                **base_update,
+                "review_status": "locked",
+            },
+        )
+    else:
+        # Saved, but not final — a User proposed a cause the evidence
+        # doesn't clearly support, so it waits for an Admin decision
+        # instead of locking (and training) unchecked.
+        grade = (
+            existing.get("evidence_map", {})
+            .get(feedback.cause, {})
+            .get("evidence_strength", "not evaluated")
+        )
+        updated = submit_investigation_feedback(
+            investigation_id,
+            {
+                **base_update,
+                "review_status": "pending_admin_approval",
+                "pending_reason": (
+                    f"Evidence for '{feedback.cause}' is graded "
+                    f"'{grade}' — below the strong/moderate bar for "
+                    "locking without admin approval."
+                ),
+            },
+        )
 
     if updated is None:
         raise HTTPException(
@@ -307,17 +429,133 @@ def submit_investigation_feedback_route(
 
     # Close the loop: a confirmed/overridden human decision is a genuine
     # labelled example, so feed it back into the training set and retrain
-    # immediately, rather than caching this one question's answer. A single
-    # added example has a modest effect on a 400+-example Random Forest —
-    # this is a real feedback loop, not an instant fix for one question.
+    # immediately — but only once it's actually locked. A pending review
+    # never trains the model until an admin resolves it. A single added
+    # example has a modest effect on a 400+-example Random Forest — this
+    # is a real feedback loop, not an instant fix for one question.
     training_example_added = False
     diagnostic_features = updated.get("diagnostic_features")
 
     if (
-        feedback.decision in {"confirmed", "overridden"}
+        locks_immediately
+        and feedback.decision in {"confirmed", "overridden"}
         and diagnostic_features
     ):
         add_ml_training_example(feedback.cause, diagnostic_features)
+        retrain_model()
+        training_example_added = True
+
+    updated["ml_training_example_added"] = training_example_added
+
+    return updated
+
+
+# Lets an Admin resolve a pending (not-yet-locked) review: approve the
+# User's original proposal as-is, override it with a different cause, or
+# reject it outright and send the investigation back to needing review.
+# This is the ONLY way a pending review's evidence-unsupported cause ever
+# reaches the ML training set — and even then, only via 'approve' or
+# 'override', never 'reject'.
+@app.post("/api/investigations/{investigation_id}/feedback/resolve")
+def resolve_investigation_feedback_route(
+    investigation_id: str,
+    resolution: AdminResolutionInput,
+) -> Dict[str, Any]:
+
+    if resolution.admin_action not in {"approve", "override", "reject"}:
+        raise HTTPException(
+            status_code=422,
+            detail="admin_action must be one of: approve, override, reject.",
+        )
+
+    if resolution.admin_action == "override" and not resolution.cause:
+        raise HTTPException(
+            status_code=422,
+            detail="cause is required when admin_action is 'override'.",
+        )
+
+    existing = get_investigation(investigation_id)
+
+    if existing is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No investigation found with id {investigation_id}.",
+        )
+
+    if existing.get("review_status") != "pending_admin_approval":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This investigation is not awaiting admin approval "
+                f"(status: {existing.get('review_status')})."
+            ),
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    final_cause: Optional[str] = None
+
+    if resolution.admin_action == "approve":
+
+        # The User's original proposal stands, exactly as submitted —
+        # this is the moment it finally locks and can train the model.
+        update = {
+            "review_status": "locked",
+            "admin_decision": "approved",
+            "admin_reviewer": resolution.reviewer,
+            "admin_decided_at": now,
+        }
+        final_cause = existing.get("human_feedback_cause")
+
+    elif resolution.admin_action == "override":
+
+        # Admin's own cause replaces the User's proposal. The original
+        # proposal is preserved separately so the audit trail still
+        # shows what the User actually proposed, not just Admin's answer.
+        update = {
+            "review_status": "locked",
+            "admin_decision": "overridden",
+            "admin_reviewer": resolution.reviewer,
+            "admin_decided_at": now,
+            "original_proposed_cause": existing.get("human_feedback_cause"),
+            "human_feedback_cause": resolution.cause,
+            "human_feedback_decision": "overridden",
+            "human_feedback_notes": resolution.notes,
+        }
+        final_cause = resolution.cause
+
+    else:  # reject
+
+        # Neither answer stands — reset back to "not yet reviewed" so a
+        # fresh review can be submitted, rather than leaving a rejected
+        # proposal stuck in place. Nothing here ever trains the model.
+        update = {
+            "review_status": None,
+            "admin_decision": "rejected",
+            "admin_reviewer": resolution.reviewer,
+            "admin_decided_at": now,
+            "pending_reason": None,
+            "human_feedback_decision": None,
+            "human_feedback_cause": None,
+            "human_feedback_notes": None,
+            "human_feedback_reviewer": None,
+            "human_feedback_role": None,
+            "human_feedback_at": None,
+        }
+
+    updated = submit_investigation_feedback(
+        investigation_id,
+        update,
+    )
+
+    training_example_added = False
+    diagnostic_features = (updated or {}).get("diagnostic_features")
+
+    if (
+        resolution.admin_action in {"approve", "override"}
+        and final_cause
+        and diagnostic_features
+    ):
+        add_ml_training_example(final_cause, diagnostic_features)
         retrain_model()
         training_example_added = True
 

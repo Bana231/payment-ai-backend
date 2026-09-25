@@ -111,6 +111,23 @@ def list_investigations(limit: int) -> List[Dict[str, Any]]:
     return response.data
 
 
+# Every investigation currently awaiting an admin decision (see
+# api.py's /feedback and /feedback/resolve routes) — oldest first, so an
+# admin works through the queue in the order things actually came in.
+# Capped at 200: a prototype-scale queue, not meant to page past that.
+def list_pending_investigations() -> List[Dict[str, Any]]:
+    response = (
+        get_supabase()
+        .table("investigations")
+        .select("*")
+        .eq("review_status", "pending_admin_approval")
+        .order("human_feedback_at")
+        .limit(200)
+        .execute()
+    )
+    return response.data
+
+
 def get_transaction(transaction_id: str) -> Dict[str, Any] | None:
     """Look up one persisted transaction for investigation context."""
     response = (
