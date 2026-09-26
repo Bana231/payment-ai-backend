@@ -177,6 +177,37 @@ def list_transactions(limit: int) -> List[Dict[str, Any]]:
     return all_transactions
 
 
+# The TRUE total row count in the transactions table, independent of
+# whatever page size a caller asks list_transactions() for. Uses
+# PostgREST's count="exact" so it never has to actually fetch the rows
+# just to count them — `limit(1)` keeps the response body tiny while
+# `.count` still reflects every row in the table.
+def count_transactions() -> int:
+    response = (
+        get_supabase()
+        .table("transactions")
+        .select("id", count="exact")
+        .limit(1)
+        .execute()
+    )
+    return response.count or 0
+
+
+# Same idea as count_transactions above, scoped to FAILED rows only — so
+# a failure-rate stat can be computed from two real counts instead of
+# from whatever fraction of a capped sample happened to be FAILED.
+def count_failed_transactions() -> int:
+    response = (
+        get_supabase()
+        .table("transactions")
+        .select("id", count="exact")
+        .eq("status", "FAILED")
+        .limit(1)
+        .execute()
+    )
+    return response.count or 0
+
+
 # Same paging idea as list_transactions above, but instead of "give me the
 # first N", this asks for "give me every transaction created between
 # these two exact timestamps" — used whenever a question is scoped to a

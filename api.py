@@ -22,6 +22,8 @@ from ml_diagnosis import retrain_model
 from rag.retriever import refresh_index
 from supabase_store import (
     add_ml_training_example,
+    count_failed_transactions,
+    count_transactions,
     create_knowledge_document,
     delete_knowledge_document,
     get_investigation,
@@ -564,20 +566,23 @@ def resolve_investigation_feedback_route(
     return updated
 
 
-# Returns the stored synthetic transactions, capped at 5000 regardless
-# of what's asked for, to keep responses reasonably sized. Powers the
-# Dashboard and Transactions pages.
+# Returns the stored synthetic transactions. `limit` has no upper cap —
+# `count` is always the TRUE total row count in the table (a separate,
+# cheap count="exact" query), never just "however many rows we happened
+# to return", so it keeps climbing correctly past any request size.
+# Powers the Dashboard and Transactions pages.
 @app.get("/api/transactions")
 def transaction_history(
     limit: int = 100,
 ) -> Dict[str, Any]:
     """Return persisted synthetic authorization records from Supabase."""
 
-    safe_limit = max(1, min(limit, 5000))
+    safe_limit = max(1, limit)
     transactions = list_transactions(safe_limit)
 
     return {
-        "count": len(transactions),
+        "count": count_transactions(),
+        "failed_count": count_failed_transactions(),
         "transactions": transactions,
     }
 
